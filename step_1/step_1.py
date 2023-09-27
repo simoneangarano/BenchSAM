@@ -74,8 +74,11 @@ class SinglePointInferenceEngine:
         if self.prompts is not None:
             prompt = self.prompts[self.prompts['name']==name[0]][['prompt', 'class']]
             return [[prompt.values[0][0]]], prompt.values[0][1]
+        
         # Otherwise, generate a new prompt
-        x_v, y_v = np.where(label[0] >= 0)
+        C = np.unique(label)[1:]
+        c = np.random.choice(C)
+        x_v, y_v = np.where(label[0] == c)
         r = random.randint(0,len(x_v))
         x, y = x_v[r], y_v[r]
         return [[[y,x]]], label[0][x,y] # inverted to compensate different indexing

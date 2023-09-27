@@ -5,11 +5,10 @@ import numpy as np
 import pandas as pd
 
 import torch
-from torchvision import transforms, datasets
-from datasets import CitySegmentation
+from datasets import CitySegmentation, COCOSegmentation
 from transformers import (SamModel, SamProcessor)
 
-from utils import annToMask
+from utils import get_pred_classes
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
@@ -44,12 +43,7 @@ class SinglePointInferenceEngine:
         if self.args.dataset == 'cityscapes':
             dataset = CitySegmentation(root=self.args.data_dir, split=self.args.split, crop_size=self.args.crop_size)
         elif self.args.dataset == 'coco':
-            annFile = self.data_dir.joinpath(f'annotations/instances_{self.args.split}2017.json')
-            dataset = datasets.CocoDetection(root=self.data_dir.joinpath(f'{self.args.split}2017'), 
-                                             annFile=annFile, 
-                                             transform=transforms.ToTensor(),
-                                             target_transform=None,
-                                             transforms=None)
+            dataset = COCOSegmentation(root=self.args.data_dir, split=self.args.split, crop_size=self.args.crop_size)
         else:
             raise NotImplementedError
 
@@ -78,71 +72,60 @@ class SinglePointInferenceEngine:
         scores = outputs.iou_scores
         return masks, scores
         
-    def get_prompt(self, image, label):
+    def get_prompt(self, name, label):
         # Use precomputed prompts if available
-        try:
-            label[0]['image_id']
-        except:
-            print('Empty label')
-            return None, None
-
         if self.prompts is not None:
-            prompt = self.prompts[self.prompts['name']==label[0]['image_id']][['prompt', 'class']]
-            if prompt.values.size > 0:
-                return [[prompt.values[0][0]]], prompt.values[0][1] 
-            else:
-                return None, None
+            prompt = self.prompts[self.prompts['name']==name][['prompt', 'class']]
+            return [[prompt.values[0][0]]], prompt.values[0][1] 
+            
         # Otherwise, generate a new prompt
-
-        m = random.sample(label, 1)[0]
-
-        c = m['category_id']
-        m = annToMask(image, m)
-
-        x_v, y_v = np.where(m >= 0)
-        r = random.randint(0,len(x_v))
+        C = np.unique(label[0])[1:]
+        c = np.random.choice(C)
+        x_v, y_v = np.where(label[0] == c)
+        r = random.randint(0, len(x_v) - 1)
         x, y = x_v[r], y_v[r]
-        return [[[y,x]]], c
+
+        return [[[y,x]]], c # inverted to compensate different indexing
 
     def get_masks(self):
-        name_list, mask_list, score_list, prompt_list, p_class_list = [], [], [], [], []
-        for i, l in self.dataloader:
+        name_list, mask_list, score_list, prompt_list, p_class_list, s_class_list = [], [], [], [], [], []
+        for (i, l, n) in self.dataloader:
             
-            prompt, p_class = self.get_prompt(i, l)
-            if prompt is None:
-                continue
+            prompt, p_class = self.get_prompt(n, l)
 
             masks, scores = self.get_output(i, prompt)
             
-            name_list.append(int(l[0]['image_id'].cpu().detach().numpy()))
-            mask_list.append(masks.squeeze()[scores.argmax()].cpu().detach().numpy())
+            name_list.append(int(n[0]))
+            m = masks.squeeze()[scores.argmax()].cpu().detach().numpy()
+            mask_list.append(m)
             score_list.append(float(scores.max().cpu().detach().numpy()))
             prompt_list.append(prompt[0][0])
             p_class_list.append(int(p_class))
+            s_class_list.append(get_pred_classes(m, l))
 
         if self.prompts is None:
             self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list})
             self.prompts.to_pickle(self.prompt_dir) 
             print('Prompts saved to file...')
 
-        return name_list, prompt_list, p_class_list, mask_list, score_list
+        return name_list, prompt_list, p_class_list, s_class_list, mask_list, score_list
 
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='/home/simone/SAM/COCO/')
-    parser.add_argument('--sparse_dir', type=str, default='/home/simone/SAM/sparsam/bin/')
+    parser.add_argument('--data_dir', type=str, default='/mnt/Data/sa58728/coco-2017/')
+    parser.add_argument('--sparse_dir', type=str, default='../bin/')
     parser.add_argument('--output_dir', type=str, default='../results')
 
     parser.add_argument('--dataset', type=str, default='coco', choices=['coco', 'cityscapes'])
     parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
     parser.add_argument('--crop_size', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--cuda', type=int, default=3)
 
     parser.add_argument('--model', type=str, default='facebook/sam-vit-huge')
     parser.add_argument('--processor', type=str, default='facebook/sam-vit-huge')
@@ -156,14 +139,14 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
-    device = torch.device('cuda' if args.device=='cuda' and torch.cuda.is_available() else 'cpu')
+    device = torch.device(f'cuda:{args.cuda}' if torch.cuda.is_available() else 'cpu')
 
     spie = SinglePointInferenceEngine(args, device)
     print('Extracting masks...')
-    name, prompt, p_class, mask, score = spie.get_masks()
+    name, prompt, p_class, s_class, mask, score = spie.get_masks()
     if args.save_results:
         print('Saving results...')
-        df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 'mask': mask, 'score': score})
+        df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class': s_class, 'mask': mask, 'score': score})
         df.to_pickle(spie.output_dir.joinpath(f'{args.dataset}_SAM_{args.sparsity}.pkl'))
         print('Results saved!')
 

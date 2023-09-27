@@ -9,6 +9,7 @@ from tqdm import trange
 import pickle
 
 
+
 class SegmentationDataset(object):
     """Segmentation Base Dataset"""
 
@@ -106,6 +107,7 @@ class SegmentationDataset(object):
         return 0
 
 
+
 class CitySegmentation(SegmentationDataset):
     """Cityscapes Semantic Segmentation Dataset.
 
@@ -193,7 +195,6 @@ class CitySegmentation(SegmentationDataset):
     def pred_offset(self):
         return 0
 
-
 def _get_city_pairs(folder, split='train'):
     def get_path_pairs(img_folder, mask_folder):
         img_paths = []
@@ -232,6 +233,7 @@ def _get_city_pairs(folder, split='train'):
     return img_paths, mask_paths
 
 
+
 class COCOSegmentation(SegmentationDataset):
     """COCO Semantic Segmentation Dataset for VOC Pre-training.
 
@@ -259,9 +261,12 @@ class COCOSegmentation(SegmentationDataset):
     >>>     trainset, 4, shuffle=True,
     >>>     num_workers=4)
     """
-    CAT_LIST = [0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
-                1, 64, 20, 63, 7, 72]
-    NUM_CLASS = 21
+    # CAT_LIST = [0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
+    #             1, 64, 20, 63, 7, 72]
+    # NUM_CLASS = 21
+    
+    CAT_LIST = list(range(92))
+    NUM_CLASS = 92
 
     def __init__(self, root='../datasets/coco', split='train', mode=None, transform=None, **kwargs):
         super(COCOSegmentation, self).__init__(root, split, mode, transform, **kwargs)
@@ -288,6 +293,9 @@ class COCOSegmentation(SegmentationDataset):
             self.ids = self._preprocess(ids, ids_file)
         self.transform = transform
 
+    def __len__(self):
+        return len(self.ids)
+    
     def __getitem__(self, index):
         coco = self.coco
         img_id = self.ids[index]
@@ -308,7 +316,7 @@ class COCOSegmentation(SegmentationDataset):
         # general resize, normalize and toTensor
         if self.transform is not None:
             img = self.transform(img)
-        return img, mask, os.path.basename(self.ids[index])
+        return img, mask, os.path.basename(str(self.ids[index]))
 
     def _mask_transform(self, mask):
         return torch.LongTensor(np.array(mask).astype('int32'))
@@ -353,7 +361,11 @@ class COCOSegmentation(SegmentationDataset):
     @property
     def classes(self):
         """Category names."""
-        return ('background', 'airplane', 'bicycle', 'bird', 'boat', 'bottle',
-                'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse',
-                'motorcycle', 'person', 'potted-plant', 'sheep', 'sofa', 'train',
-                'tv')
+        return ('background', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
+                'street sign', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 
+                'hat', 'backpack', 'umbrella', 'shoe', 'eye glasses', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports', 'kite', 
+                'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'plate', 'wine glass', 'cup', 'fork', 'knife', 
+                'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+                'potted plant', 'bed', 'mirror', 'dining table', 'window', 'desk', 'toilet', 'door', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
+                'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'blender', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
+                'hair drier', 'toothbrush', 'hair brush')
