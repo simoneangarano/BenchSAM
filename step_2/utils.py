@@ -34,10 +34,11 @@ def get_pred_classes(inst, label):
 
 
 ### Visualization ###
-
-def show_mask(mask, ax, random_color=False):
+def show_mask(mask, ax, random_color=False, color=None):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
+    elif color is not None:
+        color = np.array(color)
     else:
         color = np.array([30/255, 144/255, 255/255, 0.6])
     h, w = mask.shape[-2:]
@@ -58,7 +59,7 @@ def show_boxes_on_image(raw_image, boxes):
     plt.show()
 
 def show_points_on_image(raw_image, input_points, input_labels=None):
-    plt.figure(figsize=(10,10))
+    plt.figure(figsize=(6,6))
     plt.imshow(raw_image)
     input_points = np.array(input_points)
     if input_labels is None:
@@ -83,25 +84,44 @@ def show_points_and_boxes_on_image(raw_image, boxes, input_points, input_labels=
     plt.axis('on')
     plt.show()
 
-def show_points_and_boxes_on_image(raw_image, boxes, input_points, input_labels=None):
-    plt.figure(figsize=(10,10))
-    plt.imshow(raw_image)
+def get_mask_limits(masks):
+  if len(masks) == 0:
+    return np.zeros((0, 4), dtype=int)
+  n = len(masks)
+  bb = np.zeros((n, 4), dtype=int)
+  for index, mask in enumerate(masks):
+      y, x = np.where(mask != 0)
+      bb[index, 0] = np.min(x)
+      bb[index, 1] = np.min(y)
+      bb[index, 2] = np.max(x)
+      bb[index, 3] = np.max(y)
+  return np.min(bb[:,:2], axis=0), np.max(bb[:,2:], axis=0)
+
+C = [[0.00, 0.65, 0.88, 0.6],[0.95, 0.47, 0.13, 0.6]]
+
+def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=None, zoom=True):
+    plt.figure(figsize=(5,5))
+    plt.imshow(raw_image, alpha=0.6)
     input_points = np.array(input_points)
     if input_labels is None:
       labels = np.ones_like(input_points[:, 0])
     else:
       labels = np.array(input_labels)
-    show_points(input_points, labels, plt.gca())
-    for box in boxes:
-      show_box(box, plt.gca())
-    plt.axis('on')
+    show_points(input_points, labels, plt.gca()) 
+    for i, m in enumerate(masks):
+      show_mask(m, plt.gca(), color=C[i])
+    if zoom:
+      min, max = get_mask_limits(masks)
+      plt.xlim(min[0], max[0])
+      plt.ylim(max[1], min[1])
+    plt.axis('off')
     plt.show()
 
-def show_points(coords, labels, ax, marker_size=375):
+def show_points(coords, labels, ax, marker_size=100):
     pos_points = coords[labels==1]
     neg_points = coords[labels==0]
-    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='none', marker='o', s=marker_size, edgecolor='white', linewidth=1.25)
+    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='none', marker='o', s=marker_size, edgecolor='white', linewidth=1.25)
 
 def show_masks_on_image(raw_image, masks, scores):
     if len(masks.shape) == 4:
@@ -119,6 +139,7 @@ def show_masks_on_image(raw_image, masks, scores):
       axes[i].title.set_text(f"Mask {i+1}, Score: {score.item():.3f}")
       axes[i].axis("off")
     plt.show()
+
 
 
 # Data helper functions
