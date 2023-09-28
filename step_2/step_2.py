@@ -82,9 +82,13 @@ class SinglePointInferenceEngine:
         # Otherwise, generate a new prompt
         C = np.unique(label[0])[1:]
         c = np.random.choice(C)
-        x_v, y_v = np.where(label[0] == c)
-        r = random.randint(0, len(x_v) - 1)
-        x, y = x_v[r], y_v[r]
+        if self.args.center_prompt:
+            x, y = torch.sum(torch.argwhere(label==c),0)/torch.sum(label==c).detach().cpu().numpy()
+            x, y = int(x), int(y)
+        else:
+            x_v, y_v = np.where(label[0] == c)
+            r = random.randint(0, len(x_v) - 1)
+            x, y = x_v[r], y_v[r]
 
         return [[[y,x]]], c # inverted to compensate different indexing
 
@@ -131,6 +135,8 @@ def main():
     parser.add_argument('--model', type=str, default='facebook/sam-vit-huge')
     parser.add_argument('--processor', type=str, default='facebook/sam-vit-huge')
     parser.add_argument('--sparsity', type=int, default=0)
+
+    parser.add_argument('--center_prompt', type=bool, default=False)
 
     parser.add_argument('--save_results', type=bool, default=True)
 
