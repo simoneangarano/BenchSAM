@@ -26,7 +26,8 @@ def calculate_metrics(target, pred, eps=1e-5, verbose=False):
 
     return iou, pixel_acc, dice, precision, specificity, recall
 
-
+def get_pred_classes(inst, label):
+    return np.unique(inst * label)
 
 ### Visualization ###
 

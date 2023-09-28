@@ -195,6 +195,31 @@ class CitySegmentation(SegmentationDataset):
     def pred_offset(self):
         return 0
 
+    @property
+    def classes(self):
+        return ('Road',         # 7
+                'Sidewalk',     # 8
+                'Building',     # 11
+                'Wall',         # 12
+                'Fence',        # 13
+                'Pole',         # 17
+                'Traffic Light',# 19
+                'Traffic Sign', # 20
+                'Vegetation',   # 21
+                'Terrain',      # 22
+                'Sky',          # 23
+                'Person',       # 24
+                'Rider',        # 25
+                'Car',          # 26
+                'Truck',        # 27
+                'Bus',          # 28
+                'Train',        # 31
+                'Motorcycle',   # 32
+                'Bicycle',      # 33
+                # 'Void'         # -1, 0, 1, 2, 3, 4, 5, 6, 9, 10, 14, 15, 16, 18, 29, 30
+                )
+
+
 def _get_city_pairs(folder, split='train'):
     def get_path_pairs(img_folder, mask_folder):
         img_paths = []
@@ -348,8 +373,8 @@ class COCOSegmentation(SegmentationDataset):
             cocotarget = self.coco.loadAnns(self.coco.getAnnIds(imgIds=img_id))
             img_metadata = self.coco.loadImgs(img_id)[0]
             mask = self._gen_seg_mask(cocotarget, img_metadata['height'], img_metadata['width'])
-            # more than 1k pixels
-            if (mask > 0).sum() > 1000:
+            # mask is not null
+            if (mask > 0).sum() > 0: # 1000:
                 new_ids.append(img_id)
             tbar.set_description('Doing: {}/{}, got {} qualified images'. \
                                  format(i, len(ids), len(new_ids)))

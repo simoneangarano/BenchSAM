@@ -1,15 +1,15 @@
-import requests, argparse, random
+import argparse, random
 from pathlib import Path
+from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
 
-from PIL import Image
-import matplotlib.pyplot as plt
-
-import torch, torchvision
+import torch
 from datasets import CitySegmentation
 from transformers import (SamModel, SamProcessor)
+
+from utils import get_pred_classes
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
@@ -84,31 +84,33 @@ class SinglePointInferenceEngine:
         return [[[y,x]]], label[0][x,y] # inverted to compensate different indexing
 
     def get_masks(self):
-        name_list, mask_list, score_list, prompt_list, p_class_list = [], [], [], [], []
-        for i, l, n in self.dataloader:
+        name_list, mask_list, score_list, prompt_list, p_class_list, s_class_list = [], [], [], [], [], []
+        for i, l, n in tqdm(self.dataloader):
             
             prompt, p_class = self.get_prompt(n, l)
             masks, scores = self.get_output(i, prompt)
             
             name_list.append(str(n[0]))
-            mask_list.append(masks.squeeze()[scores.argmax()].cpu().detach().numpy())
+            m = masks.squeeze()[scores.argmax()]
+            mask_list.append(m.cpu().detach().numpy())
             score_list.append(float(scores.max().cpu().detach().numpy()))
             prompt_list.append(prompt[0][0])
             p_class_list.append(int(p_class))
+            s_class_list.append(list(get_pred_classes(m, l)))
 
         if self.prompts is None:
             self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list})
             self.prompts.to_pickle(self.prompt_dir) 
             print('Prompts saved to file...')
 
-        return name_list, prompt_list, p_class_list, mask_list, score_list
+        return name_list, prompt_list, p_class_list, s_class_list, mask_list, score_list
 
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='/home/simone/KD/CIRKD/data/Cityscapes/')
-    parser.add_argument('--sparse_dir', type=str, default='/home/simone/SAM/sparsam/bin/')
+    parser.add_argument('--data_dir', type=str, default='/mnt/Data/sa58728/Cityscapes/')
+    parser.add_argument('--sparse_dir', type=str, default='../bin/')
     parser.add_argument('--output_dir', type=str, default='../results')
 
     parser.add_argument('--dataset', type=str, default='cityscapes', choices=['cityscapes'])
@@ -118,7 +120,7 @@ def main():
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--cuda', type=int, default=3)
 
     parser.add_argument('--model', type=str, default='facebook/sam-vit-huge')
     parser.add_argument('--processor', type=str, default='facebook/sam-vit-huge')
@@ -131,14 +133,14 @@ def main():
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    device = torch.device('cuda' if args.device=='cuda' and torch.cuda.is_available() else 'cpu')
+    device = torch.device(f'cuda:{args.cuda}' if torch.cuda.is_available() else 'cpu')
 
     spie = SinglePointInferenceEngine(args, device)
     print('Extracting masks...')
-    name, prompt, p_class, mask, score = spie.get_masks()
+    name, prompt, p_class, s_class, mask, score = spie.get_masks()
     if args.save_results:
         print('Saving results...')
-        df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 'mask': mask, 'score': score})
+        df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class':s_class, 'mask': mask, 'score': score})
         df.to_pickle(spie.output_dir.joinpath(f'{args.dataset}_SAM_{args.sparsity}.pkl'))
         print('Results saved!')
 

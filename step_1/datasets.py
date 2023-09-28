@@ -1,7 +1,7 @@
 import os, random
 
 import numpy as np
-import torch, torchvision
+import torch
 
 from PIL import Image, ImageOps, ImageFilter
 
@@ -190,6 +190,30 @@ class CitySegmentation(SegmentationDataset):
     @property
     def pred_offset(self):
         return 0
+    
+    @property
+    def classes(self):
+        return ('Road',         # 7
+                'Sidewalk',     # 8
+                'Building',     # 11
+                'Wall',         # 12
+                'Fence',        # 13
+                'Pole',         # 17
+                'Traffic Light',# 19
+                'Traffic Sign', # 20
+                'Vegetation',   # 21
+                'Terrain',      # 22
+                'Sky',          # 23
+                'Person',       # 24
+                'Rider',        # 25
+                'Car',          # 26
+                'Truck',        # 27
+                'Bus',          # 28
+                'Train',        # 31
+                'Motorcycle',   # 32
+                'Bicycle',      # 33
+                # 'Void'         # -1, 0, 1, 2, 3, 4, 5, 6, 9, 10, 14, 15, 16, 18, 29, 30
+                )
 
 
 def _get_city_pairs(folder, split='train'):

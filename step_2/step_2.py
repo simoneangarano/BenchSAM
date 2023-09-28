@@ -1,5 +1,6 @@
 import argparse, random, warnings
 from pathlib import Path
+from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
@@ -75,7 +76,7 @@ class SinglePointInferenceEngine:
     def get_prompt(self, name, label):
         # Use precomputed prompts if available
         if self.prompts is not None:
-            prompt = self.prompts[self.prompts['name']==name][['prompt', 'class']]
+            prompt = self.prompts[self.prompts['name']==int(name[0])][['prompt', 'class']]
             return [[prompt.values[0][0]]], prompt.values[0][1] 
             
         # Otherwise, generate a new prompt
@@ -89,19 +90,19 @@ class SinglePointInferenceEngine:
 
     def get_masks(self):
         name_list, mask_list, score_list, prompt_list, p_class_list, s_class_list = [], [], [], [], [], []
-        for (i, l, n) in self.dataloader:
+        for j, (i, l, n) in enumerate(tqdm(self.dataloader)):
             
             prompt, p_class = self.get_prompt(n, l)
 
             masks, scores = self.get_output(i, prompt)
             
             name_list.append(int(n[0]))
-            m = masks.squeeze()[scores.argmax()].cpu().detach().numpy()
-            mask_list.append(m)
+            m = masks.squeeze()[scores.argmax()]
+            mask_list.append(m.cpu().detach().numpy())
             score_list.append(float(scores.max().cpu().detach().numpy()))
             prompt_list.append(prompt[0][0])
             p_class_list.append(int(p_class))
-            s_class_list.append(get_pred_classes(m, l))
+            s_class_list.append(list(get_pred_classes(m, l)))
 
         if self.prompts is None:
             self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list})
@@ -129,7 +130,7 @@ def main():
 
     parser.add_argument('--model', type=str, default='facebook/sam-vit-huge')
     parser.add_argument('--processor', type=str, default='facebook/sam-vit-huge')
-    parser.add_argument('--sparsity', type=int, default=90)
+    parser.add_argument('--sparsity', type=int, default=0)
 
     parser.add_argument('--save_results', type=bool, default=True)
 

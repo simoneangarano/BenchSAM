@@ -29,7 +29,7 @@ def calculate_metrics(target, pred, eps=1e-5, verbose=False):
 
 
 def get_pred_classes(inst, label):
-    return list(np.unique(inst * label))
+    return np.unique(inst * label)
 
 
 
