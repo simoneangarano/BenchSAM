@@ -1,3 +1,4 @@
+import os
 import argparse, random, warnings
 from pathlib import Path
 from tqdm import tqdm
@@ -7,9 +8,10 @@ import pandas as pd
 
 import torch
 from datasets import CitySegmentation, COCOSegmentation
-from transformers import (SamModel, SamProcessor)
 
-import os
+from fastsam import FastSAM, FastSAMPrompt
+from utils import suppress_stdout
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 warnings.simplefilter('ignore', FutureWarning)
 
@@ -21,7 +23,7 @@ class SinglePointInferenceEngine:
         self.device = device
         self.data_dir = Path(args.data_dir)
         self.output_dir = Path(args.output_dir)
-        self.sparse_dir = Path(args.sparse_dir)
+        self.model_dir = Path(args.model_dir)
         self.prompt_dir = self.output_dir.joinpath(f'{args.experiment}{args.dataset}_prompts.pkl')
         
         if self.prompt_dir.exists():
@@ -53,32 +55,23 @@ class SinglePointInferenceEngine:
                                                       num_workers=self.args.num_workers, pin_memory=self.args.pin_memory, worker_init_fn=None)
 
     def get_model(self):
-        if self.args.sparsity > 0:
-            print('Loading sparse model...')
-            self.model = SamModel.from_pretrained(self.sparse_dir.joinpath(f'{self.args.sparsity}')).to(self.device).eval()
-        else:
-            print('Loading dense model...')
-            self.model = SamModel.from_pretrained(self.args.model).to(self.device).eval()
-        self.processor = SamProcessor.from_pretrained(self.args.processor)
+        self.model = FastSAM(self.model_dir.joinpath('FastSAM.pt'))
     
     # Inference
 
     def get_output(self, img, prompt):
-        inputs = self.processor(img, input_points=prompt, return_tensors="pt").to(self.device)
-        image_embeddings = self.model.get_image_embeddings(inputs["pixel_values"])
-        inputs.pop("pixel_values", None) # pixel_values are no more needed
-        inputs.update({"image_embeddings": image_embeddings})
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-        masks = self.processor.image_processor.post_process_masks(outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu())[0]
-        scores = outputs.iou_scores
-        return masks, scores
+
+        with suppress_stdout():
+            everything_results = self.model(img, device=self.device)
+            prompt_process = FastSAMPrompt(img, everything_results, device=self.device)
+            mask, score = prompt_process.point_prompt(points=prompt, pointlabel=[1])
+        return mask, score
         
     def get_prompt(self, name, label):
         # Use precomputed prompts if available
         if self.prompts is not None:
             prompt = self.prompts[self.prompts['name']==int(name[0])][['prompt', 'class']]
-            return [[prompt.values[0][0]]], prompt.values[0][1] 
+            return [prompt.values[0][0]], prompt.values[0][1] 
             
         # Otherwise, generate a new prompt
         C = np.unique(label[0])[1:]
@@ -91,7 +84,7 @@ class SinglePointInferenceEngine:
             r = random.randint(0, len(x_v) - 1)
             x, y = x_v[r], y_v[r]
 
-        return [[[y,x]]], c # inverted to compensate different indexing
+        return [[y,x]], c # inverted to compensate different indexing
 
     def get_pred_classes(self, inst, label):
         im = torch.logical_not(inst).to(torch.uint8)
@@ -108,14 +101,14 @@ class SinglePointInferenceEngine:
         for j, (i, l, n) in enumerate(tqdm(self.dataloader)):
             
             prompt, p_class = self.get_prompt(n, l)
-
-            masks, scores = self.get_output(i, prompt)
+            masks, scores = self.get_output(i[0].detach().cpu().numpy().astype(np.uint8), prompt)
             
+            m = torch.nn.functional.upsample(masks[None,None].to(torch.uint8),[i.shape[1], i.shape[2]], mode='nearest')[0,0].bool()
+
             name_list.append(int(n[0]))
-            m = masks.squeeze()[scores.argmax()]
             mask_list.append(m.cpu().detach().numpy())
-            score_list.append(float(scores.max().cpu().detach().numpy()))
-            prompt_list.append(prompt[0][0])
+            score_list.append(float(scores))
+            prompt_list.append(prompt[0])
             p_class_list.append(int(p_class))
             s_class_list.append(list(self.get_pred_classes(m, l)))
 
@@ -131,7 +124,7 @@ class SinglePointInferenceEngine:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=str, default='../../Datasets/coco-2017/')
-    parser.add_argument('--sparse_dir', type=str, default='../bin/')
+    parser.add_argument('--model_dir', type=str, default='../bin/')
     parser.add_argument('--output_dir', type=str, default='../results')
 
     parser.add_argument('--dataset', type=str, default='coco', choices=['coco', 'cityscapes'])
