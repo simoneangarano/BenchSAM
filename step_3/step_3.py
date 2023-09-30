@@ -10,10 +10,12 @@ import torch
 from datasets import CitySegmentation, COCOSegmentation
 
 from fastsam import FastSAM, FastSAMPrompt
+from transformers import (SamModel, SamProcessor)
+
 from utils import suppress_stdout
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
-warnings.simplefilter('ignore', FutureWarning)
+warnings.simplefilter('ignore')
 
 
 
@@ -55,8 +57,21 @@ class SinglePointInferenceEngine:
                                                       num_workers=self.args.num_workers, pin_memory=self.args.pin_memory, worker_init_fn=None)
 
     def get_model(self):
-        self.model = FastSAM(self.model_dir.joinpath('FastSAM.pt'))
-    
+        if self.args.model == 'FastSAM':
+            print('Loading FastSAM model...')
+            self.model = FastSAM(self.model_dir.joinpath('FastSAM.pt'))
+            self.model.to(self.device)
+        elif self.args.model == 'SAM':
+            if self.args.sparsity > 0:
+                print('Loading sparse model...')
+                self.model = SamModel.from_pretrained(self.sparse_dir.joinpath(f'{self.args.sparsity}')).to(self.device).eval()
+            else:
+                print('Loading dense model...')
+                self.model = SamModel.from_pretrained('facebook/sam-vit-huge').to(self.device).eval()
+                self.processor = SamProcessor.from_pretrained(self.args.processor)
+        else:
+            raise NotImplementedError
+        
     # Inference
 
     def get_output(self, img, prompt):
@@ -131,12 +146,12 @@ def main():
     parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
     parser.add_argument('--crop_size', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_workers', type=int, default=64)
+    parser.add_argument('--num_workers', type=int, default=16)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--cuda', type=int, default=0)
 
-    parser.add_argument('--model', type=str, default='facebook/sam-vit-huge')
+    parser.add_argument('--model', type=str, default='SAM', choices=['SAM', 'FastSAM', 'MobileSAM'])
     parser.add_argument('--processor', type=str, default='facebook/sam-vit-huge')
     parser.add_argument('--sparsity', type=int, default=0)
 
@@ -161,7 +176,7 @@ def main():
     if args.save_results:
         print('Saving results...')
         df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class': s_class, 'mask': mask, 'score': score})
-        df.to_pickle(spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_SAM_{args.sparsity}.pkl'))
+        df.to_pickle(spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}_{args.sparsity}.pkl'))
         print('Results saved!')
 
 if __name__ == '__main__':

@@ -87,6 +87,8 @@ def get_mask_limits(masks):
   bb = np.zeros((n, 4), dtype=int)
   for index, mask in enumerate(masks):
       y, x = np.where(mask != 0)
+      if len(x) == 0:
+          continue
       bb[index, 0] = np.min(x)
       bb[index, 1] = np.min(y)
       bb[index, 2] = np.max(x)
