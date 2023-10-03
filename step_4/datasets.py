@@ -395,6 +395,7 @@ class COCOSegmentation(SegmentationDataset):
     
 
 
+
 # Copyright 2023 Simone Angarano 
 # https://simoneangarano.github.io
 # All Rights Reserved.
@@ -425,6 +426,9 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
         imgs (list): List of (image path, class_index) tuples
     """
 
+    CAT_LIST = []
+    NUM_CLASS = 0
+
     def __getitem__(self, index):
         """
         Args:
@@ -454,6 +458,12 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
     def __len__(self):
         return len(self.imgs)
     
+    def classes(self):
+        return set()
+    
+    @property
+    def num_class(self):
+        return self.NUM_CLASS
 
 
 def main():

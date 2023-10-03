@@ -5,6 +5,7 @@ from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
+import cv2
 
 import torch
 from datasets import CitySegmentation, COCOSegmentation
@@ -76,16 +77,9 @@ class SinglePointInferenceEngine:
 
     def get_output(self, img, prompt):
 
-        try:
-            everything_results = self.model(img, device=self.device, verbose=False,
-                                        retina_masks=self.args.retina, imgsz=self.args.imsize, 
-                                        conf=self.args.conf_thr, iou=self.args.iou_thr)
-        except:
-            print(img.shape, prompt)
-            everything_results = self.model(img, device=self.device, verbose=False,
-                                        retina_masks=self.args.retina, imgsz=self.args.imsize, 
-                                        conf=self.args.conf_thr, iou=self.args.iou_thr)
-            raise NotImplementedError
+        everything_results = self.model(img, device=self.device, verbose=False)
+                                    # retina_masks=self.args.retina, imgsz=self.args.imsize, 
+                                    # conf=self.args.conf_thr, iou=self.args.iou_thr)
         
         prompt_process = FastSAMPrompt(img, everything_results, device=self.device)
         mask, score = prompt_process.point_prompt(points=prompt, pointlabel=[1])
@@ -98,8 +92,16 @@ class SinglePointInferenceEngine:
             return [prompt.values[0][0]], prompt.values[0][1] 
             
         # Otherwise, generate a new prompt
+        if self.args.filter_edges:
+            e = cv2.Canny(image=label[0].numpy().astype(np.uint8), threshold1=10, threshold2=50)
+            e = cv2.dilate(e, np.ones((self.args.border_width, self.args.border_width), np.uint8), iterations = 1)
+            label = torch.logical_and(label, torch.logical_not(torch.from_numpy(e).to(torch.bool)))
+
         C = np.unique(label[0])[1:]
-        c = np.random.choice(C)
+        if len(C) == 0:
+            c = 0
+        else:
+            c = np.random.choice(C)
         if self.args.center_prompt:
             x, y = (torch.sum(torch.argwhere(label[0]==c),0)/torch.sum(label[0]==c)).detach().cpu().numpy()
             x, y = int(x), int(y)
@@ -123,10 +125,8 @@ class SinglePointInferenceEngine:
     def get_masks(self):
         name_list, mask_list, score_list, prompt_list, p_class_list, s_class_list = [], [], [], [], [], []
         for j, (i, l, n) in enumerate(tqdm(self.dataloader)):
-            
             prompt, p_class = self.get_prompt(n, l)
             masks, scores = self.get_output(i[0].detach().cpu().numpy().astype(np.uint8), prompt)
-            
             m = torch.nn.functional.interpolate(masks[None,None].to(torch.uint8),[i.shape[1], i.shape[2]],
                                                 mode='nearest')[0,0].bool()
 
@@ -156,7 +156,7 @@ def main():
     parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
     parser.add_argument('--crop_size', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_workers', type=int, default=16)
+    parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--cuda', type=int, default=0)
@@ -165,13 +165,16 @@ def main():
     parser.add_argument('--processor', type=str, default='facebook/sam-vit-huge')
     parser.add_argument('--sparsity', type=int, default=0)
 
-    parser.add_argument('--imsize', type=int, default=1024)
-    parser.add_argument('--retina', type=bool, default=True)
-    parser.add_argument('--conf_thr', type=float, default=0.25)
-    parser.add_argument('--iou_thr', type=float, default=0.0)
+    # Deprecated
+    # parser.add_argument('--imsize', type=int, default=1024)
+    # parser.add_argument('--retina', type=bool, default=True)
+    # parser.add_argument('--conf_thr', type=float, default=0.25)
+    # parser.add_argument('--iou_thr', type=float, default=0.0)
+    # parser.add_argument('--center_prompt', type=bool, default=False) # if True, the prompt is the centroid of the instance mask
 
-    parser.add_argument('--center_prompt', type=bool, default=False)
-    parser.add_argument('--class_thr', type=float, default=0.05)
+    parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
+    parser.add_argument('--filter_edges', type=bool, default=False) # removes edges from the instance mask before computing the prompt
+    parser.add_argument('--border_width', type=int, default=3) # width of the border to remove
 
     parser.add_argument('--save_results', type=bool, default=True)
     parser.add_argument('--experiment', type=str, default='')
@@ -191,8 +194,9 @@ def main():
     if args.save_results:
         print('Saving results...')
         df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class': s_class, 'mask': mask, 'score': score})
-        df.to_pickle(spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}_{args.sparsity}.pkl'))
-        print('Results saved!')
+        out_file = spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}_{args.sparsity}.pkl')
+        df.to_pickle(out_file)
+        print(f'Results saved! {out_file}')
 
 if __name__ == '__main__':
     main()

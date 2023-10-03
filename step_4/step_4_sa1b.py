@@ -7,7 +7,7 @@ import pandas as pd
 import cv2
 
 import torch
-from datasets import CitySegmentation, COCOSegmentation
+from datasets import SA1B_Dataset, CitySegmentation, COCOSegmentation
 from transformers import (SamModel, SamProcessor)
 
 import os
@@ -44,6 +44,8 @@ class SinglePointInferenceEngine:
             dataset = CitySegmentation(root=self.args.data_dir, split=self.args.split, crop_size=self.args.crop_size)
         elif self.args.dataset == 'coco':
             dataset = COCOSegmentation(root=self.args.data_dir, split=self.args.split, crop_size=self.args.crop_size)
+        elif self.args.dataset == 'sa1b':
+            dataset = SA1B_Dataset(root=self.args.data_dir)
         else:
             raise NotImplementedError
 
@@ -89,13 +91,9 @@ class SinglePointInferenceEngine:
 
         C = np.unique(label[0])[1:]
         c = np.random.choice(C)
-        if self.args.center_prompt:
-            x, y = (torch.sum(torch.argwhere(label[0]==c),0)/torch.sum(label[0]==c)).detach().cpu().numpy()
-            x, y = int(x), int(y)
-        else:
-            x_v, y_v = np.where(label[0] == c)
-            r = random.randint(0, len(x_v) - 1)
-            x, y = x_v[r], y_v[r]
+        x_v, y_v = np.where(label[0] == c)
+        r = random.randint(0, len(x_v) - 1)
+        x, y = x_v[r], y_v[r]
 
         return [[[y,x]]], c # inverted to compensate different indexing
 
@@ -117,18 +115,18 @@ class SinglePointInferenceEngine:
 
             masks, scores = self.get_output(i, prompt)
             
-            name_list.append(int(n[0]))
+            name_list.append(n[0])
             m = masks.squeeze()[scores.argmax()]
             mask_list.append(m.cpu().detach().numpy())
             score_list.append(float(scores.max().cpu().detach().numpy()))
             prompt_list.append(prompt[0][0])
-            p_class_list.append(int(p_class))
-            s_class_list.append(list(self.get_pred_classes(m, l)))
+            p_class_list.append(-1)
+            s_class_list.append([])
 
         if self.prompts is None:
             self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list})
             self.prompts.to_pickle(self.prompt_dir) 
-            print('Prompts saved to file...')
+            print(f'Prompts saved to file {self.prompt_dir}')
 
         return name_list, prompt_list, p_class_list, s_class_list, mask_list, score_list
 
@@ -136,15 +134,15 @@ class SinglePointInferenceEngine:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='../../Datasets/coco-2017/')
+    parser.add_argument('--data_dir', type=str, default='../../Datasets/SA_1B/images/')
     parser.add_argument('--sparse_dir', type=str, default='../bin/')
     parser.add_argument('--output_dir', type=str, default='../results')
 
-    parser.add_argument('--dataset', type=str, default='coco', choices=['coco', 'cityscapes'])
+    parser.add_argument('--dataset', type=str, default='coco', choices=['coco', 'cityscapes', 'sa1b'])
     parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
     parser.add_argument('--crop_size', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--cuda', type=int, default=0)
@@ -153,10 +151,10 @@ def main():
     parser.add_argument('--processor', type=str, default='facebook/sam-vit-huge')
     parser.add_argument('--sparsity', type=int, default=0)
 
-    parser.add_argument('--center_prompt', type=bool, default=False) # if True, the prompt is the centroid of the instance mask
+    # parser.add_argument('--center_prompt', type=bool, default=False) # if True, the prompt is the centroid of the instance mask
     parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
     parser.add_argument('--filter_edges', type=bool, default=False) # removes edges from the instance mask before computing the prompt
-    parser.add_argument('--border_width', type=int, default=3) # width of the border to remove
+    parser.add_argument('--border_width', type=int, default=5) # width of the border to remove
 
     parser.add_argument('--save_results', type=bool, default=True)
     parser.add_argument('--experiment', type=str, default='')
@@ -176,8 +174,9 @@ def main():
     if args.save_results:
         print('Saving results...')
         df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class': s_class, 'mask': mask, 'score': score})
-        df.to_pickle(spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_SAM_{args.sparsity}.pkl'))
-        print('Results saved!')
+        out_file = spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}_{args.sparsity}.pkl')
+        df.to_pickle(out_file)
+        print(f'Results saved! {out_file}')
 
 if __name__ == '__main__':
     main()
