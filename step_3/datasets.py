@@ -389,3 +389,13 @@ class COCOSegmentation(SegmentationDataset):
                 'potted plant', 'bed', 'mirror', 'dining table', 'window', 'desk', 'toilet', 'door', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
                 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'blender', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
                 'hair drier', 'toothbrush', 'hair brush')
+    
+
+
+def main():
+    dataset = COCOSegmentation(root='../../Datasets/coco-2017/', split='val', crop_size=0)
+    for i, l, n in dataset:
+        print(i.shape, l.shape, n)
+
+if __name__ == '__main__':
+    main()

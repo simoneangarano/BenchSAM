@@ -1,6 +1,6 @@
 #!/bin/bash
 
-for sparsity in 50
+for sparsity in 0
 do
-    python3 step_2.py --sparsity $sparsity --center_prompt False --experiment thr_ --cuda 2
+    python3 step_2.py --sparsity $sparsity --cuda 0
 done

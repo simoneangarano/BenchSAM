@@ -167,8 +167,8 @@ def main():
 
     parser.add_argument('--imsize', type=int, default=1024)
     parser.add_argument('--retina', type=bool, default=True)
-    parser.add_argument('--conf_thr', type=float, default=0.4)
-    parser.add_argument('--iou_thr', type=float, default=0.)
+    parser.add_argument('--conf_thr', type=float, default=0.25)
+    parser.add_argument('--iou_thr', type=float, default=0.0)
 
     parser.add_argument('--center_prompt', type=bool, default=False)
     parser.add_argument('--class_thr', type=float, default=0.05)
