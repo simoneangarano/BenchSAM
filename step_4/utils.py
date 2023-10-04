@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -86,6 +87,8 @@ def get_mask_limits(masks):
   n = len(masks)
   bb = np.zeros((n, 4), dtype=int)
   for index, mask in enumerate(masks):
+      if not mask.any():
+          continue
       y, x = np.where(mask != 0)
       bb[index, 0] = np.min(x)
       bb[index, 1] = np.min(y)
@@ -139,6 +142,30 @@ def show_masks_on_image(raw_image, masks, scores):
 
 
 # Data helper functions
+def get_dataset_info(dataset):
+    if dataset == 'coco':
+        root = Path("../Datasets/coco-2017/val2017/")
+        n = 92
+        classes = ['background', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
+                   'street sign', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 
+                   'hat', 'backpack', 'umbrella', 'shoe', 'eye glasses', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports', 'kite', 
+                   'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'plate', 'wine glass', 'cup', 'fork', 'knife', 
+                   'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+                   'potted plant', 'bed', 'mirror', 'dining table', 'window', 'desk', 'toilet', 'door', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
+                   'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'blender', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
+                   'hair drier', 'toothbrush', 'hair brush']
+    elif dataset == 'cityscapes':
+        root = Path("../Datasets/Cityscapes/leftImg8bit/val/")
+        n = 19
+        classes = ['Road', 'Sidewalk', 'Building', 'Wall', 'Fence', 'Pole', 'Traffic Light', 'Traffic Sign', 'Vegetation', 
+                   'Terrain', 'Sky', 'Person', 'Rider', 'Car', 'Truck', 'Bus', 'Train', 'Motorcycle', 'Bicycle']
+    elif dataset == 'sa1b':
+        root = Path("../Datasets/SA_1B/images/")
+        n = 0
+        classes = []
+    
+    return root, n, classes
+
 def annToRLE(im, ann):
     """
     Convert annotation which can be polygons, uncompressed RLE to RLE.
