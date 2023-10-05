@@ -114,7 +114,7 @@ class SinglePointInferenceEngine:
             return [[prompt.values[0][0]]], prompt.values[0][1] 
             
         # Otherwise, generate a new prompt
-        if self.args.filter_edges:
+        if self.args.edge_filter:
             e = cv2.Canny(image=label[0].numpy().astype(np.uint8), threshold1=10, threshold2=50)
             e = cv2.dilate(e, np.ones((self.args.border_width, self.args.border_width), np.uint8), iterations = 1)
             label = torch.logical_and(label, torch.logical_not(torch.from_numpy(e).to(torch.bool)))
@@ -194,7 +194,7 @@ def main():
     # parser.add_argument('--center_prompt', type=bool, default=False) # if True, the prompt is the centroid of the instance mask
 
     parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
-    parser.add_argument('--filter_edges', type=bool, default=False) # removes edges from the instance mask before computing the prompt
+    parser.add_argument('--edge_filter', type=bool, default=False) # removes edges from the instance mask before computing the prompt
     parser.add_argument('--border_width', type=int, default=5) # width of the border to remove
 
     parser.add_argument('--save_results', type=bool, default=True)

@@ -1,2 +1,2 @@
 #!/bin/bash
-python3 step_4.py --cuda 7 --dataset coco --model SAM --sparsity 50
+python3 step_4.py --cuda 1 --dataset coco --model MobileSAM --edge_filter 1 --experiment filter_
