@@ -1,3 +1,4 @@
+import sys, logging
 from pathlib import Path
 import torch
 import numpy as np
@@ -94,7 +95,9 @@ def get_mask_limits(masks):
       bb[index, 1] = np.min(y)
       bb[index, 2] = np.max(x)
       bb[index, 3] = np.max(y)
-  return np.min(bb[:,:2], axis=0), np.max(bb[:,2:], axis=0)
+      mask = mask[bb[index, 1]:bb[index, 3], bb[index, 0]:bb[index, 2]]
+
+  return np.min(bb[:,:2], axis=0).tolist(), np.max(bb[:,2:], axis=0).tolist(), mask
 
 C = [[0.00, 0.65, 0.88, 0.6],[0.95, 0.47, 0.13, 0.6]]
 
@@ -110,7 +113,7 @@ def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=
     for i, m in enumerate(masks):
       show_mask(m, plt.gca(), color=C[i])
     if zoom:
-      min, max = get_mask_limits(masks)
+      min, max, _ = get_mask_limits(masks)
       plt.xlim(min[0], max[0])
       plt.ylim(max[1], min[1])
     plt.axis('off')
@@ -207,3 +210,5 @@ def nostdout():
     sys.stdout = io.BytesIO()
     yield
     sys.stdout = save_stdout
+
+# GPU

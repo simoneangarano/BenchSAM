@@ -11,6 +11,7 @@ from datasets import SA1B_Dataset, CitySegmentation, COCOSegmentation
 from fastsam import FastSAM, FastSAMPrompt
 from transformers import SamModel, SamProcessor
 from mobile_sam import sam_model_registry, SamPredictor
+from utils import get_mask_limits
 
 warnings.simplefilter('ignore', FutureWarning)
 
@@ -58,7 +59,10 @@ class SinglePointInferenceEngine:
         if self.args.model == 'SAM':
             if self.args.sparsity > 0:
                 print('Loading sparse model...')
-                self.model = SamModel.from_pretrained(self.model_dir.joinpath(f'{self.args.sparsity}')).to(self.device).eval()
+                if self.args.pruning_method == 'l1norm':
+                    self.model = SamModel.from_pretrained(self.model_dir.joinpath(f'GUP_L1_{self.args.sparsity}')).to(self.device).eval()
+                elif self.args.pruning_method == 'sparsegpt':
+                    self.model = SamModel.from_pretrained(self.model_dir.joinpath(f'{self.args.sparsity}')).to(self.device).eval()
             else:
                 print('Loading dense model...')
                 self.model = SamModel.from_pretrained('facebook/sam-vit-huge').to(self.device).eval()
@@ -115,16 +119,16 @@ class SinglePointInferenceEngine:
             
         # Otherwise, generate a new prompt
         if self.args.edge_filter:
-            e = cv2.Canny(image=label[0].numpy().astype(np.uint8), threshold1=10, threshold2=50)
-            e = cv2.dilate(e, np.ones((self.args.border_width, self.args.border_width), np.uint8), iterations = 1)
-            label = torch.logical_and(label, torch.logical_not(torch.from_numpy(e).to(torch.bool)))
+            e = cv2.Canny(image=label.numpy().astype(np.uint8), threshold1=10, threshold2=50)
+            e = cv2.dilate(e, np.ones((self.args.edge_width, self.args.edge_width), np.uint8), iterations = 1).astype(bool)
+            label[e] = 0
 
-        C = np.unique(label[0])[1:]
+        C = np.unique(label)[1:]
         if len(C) == 0:
             c = 0
         else:
             c = np.random.choice(C)
-        x_v, y_v = np.where(label[0] == c)
+        x_v, y_v = np.where(label == c)
         r = random.randint(0, len(x_v) - 1)
         x, y = x_v[r], y_v[r]
 
@@ -141,38 +145,45 @@ class SinglePointInferenceEngine:
         return list(classes)
 
     def get_masks(self):
-        name_list, mask_list, score_list, prompt_list, p_class_list, s_class_list = [], [], [], [], [], []
+        name_list, mask_list, score_list, prompt_list = [], [], [], []
+        p_class_list, s_class_list, origin_list, shape_list = [], [], [], []
+
+        origin = [0,0]
         for _, (i, l, n) in enumerate(tqdm(self.dataloader)):
             
-            prompt, p_class = self.get_prompt(n[0], l)
-
+            prompt, p_class = self.get_prompt(n[0], l[0])
             mask, score = self.get_output(i, prompt)
+            if self.args.crop_mask:
+                origin, _, mask = get_mask_limits([mask])
 
             name_list.append(n[0])
+            shape_list.append(i.shape[2:])
             mask_list.append(mask)
+            origin_list.append(origin[::-1])
             score_list.append(score)
             prompt_list.append(prompt[0][0])
             if self.args.dataset == 'sa1b':
-                p_class_list.append(-1)
-                s_class_list.append([])
+                p_class_list.append(None)
+                s_class_list.append(None)
             else:
                 p_class_list.append(int(p_class))
                 s_class_list.append(list(self.get_pred_classes(mask, l)))
 
         if self.prompts is None:
-            self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list})
+            self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list,
+                                         'image_shape': shape_list})
             self.prompts.to_pickle(self.prompt_dir) 
             print(f'Prompts saved to file {self.prompt_dir}')
 
-        return name_list, prompt_list, p_class_list, s_class_list, mask_list, score_list
+        return name_list, prompt_list, p_class_list, s_class_list, mask_list, origin_list, score_list
 
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='../../Datasets/')
-    parser.add_argument('--model_dir', type=str, default='../bin/')
-    parser.add_argument('--output_dir', type=str, default='../results/')
+    parser.add_argument('--data_dir', type=str, default='../Datasets/')
+    parser.add_argument('--model_dir', type=str, default='bin/')
+    parser.add_argument('--output_dir', type=str, default='results/')
 
     parser.add_argument('--dataset', type=str, default='coco', choices=['coco', 'cityscapes', 'sa1b'])
     parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
@@ -185,6 +196,7 @@ def main():
 
     parser.add_argument('--model', type=str, default='SAM', choices=['SAM', 'MobileSAM', 'FastSAM'])
     parser.add_argument('--sparsity', type=int, default=0)
+    parser.add_argument('--pruning_method', type=str, default='l1norm', choices=['l1norm', 'sparsegpt'])
 
     # Deprecated
     # parser.add_argument('--imsize', type=int, default=1024)
@@ -195,8 +207,9 @@ def main():
 
     parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
     parser.add_argument('--edge_filter', type=bool, default=False) # removes edges from the instance mask before computing the prompt
-    parser.add_argument('--border_width', type=int, default=5) # width of the border to remove
+    parser.add_argument('--edge_width', type=int, default=5) # width of the border to remove
 
+    parser.add_argument('--crop_mask', type=bool, default=False) # if True, the mask is cropped to the instance limits
     parser.add_argument('--save_results', type=bool, default=True)
     parser.add_argument('--experiment', type=str, default='')
 
@@ -206,16 +219,18 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
-    device = torch.device(f'cuda:{args.cuda}' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(f'cuda:{args.cuda}' if torch.cuda.is_available() else 'cpu')    
 
     spie = SinglePointInferenceEngine(args, device)
     print('Extracting masks...')
-    name, prompt, p_class, s_class, mask, score = spie.get_masks()
+    name, prompt, p_class, s_class, mask, origin, score = spie.get_masks()
 
     if args.save_results:
         print('Saving results...')
-        df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class': s_class, 'mask': mask, 'score': score})
-        out_file = spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}_{args.sparsity}.pkl')
+        df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class': s_class, 
+                           'mask': mask, 'mask_origin': origin, 'score': score})
+        p = '_gup' if args.pruning_method == 'l1norm' else ''
+        out_file = spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}_{args.sparsity}{p}.pkl')
         df.to_pickle(out_file)
         print(f'Results saved! {out_file}')
 
