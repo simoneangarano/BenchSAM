@@ -1,5 +1,5 @@
-for sparsity in 60 70 80
+for sparsity in 40 50 60
 do
-    python3 main.py --cuda 5 --dataset coco --model SAM --edge_filter 1 \
-                    --sparsity $sparsity --experiment filter_ --pruning_method sparsegpt
+    python3 main.py --cuda 2 --dataset sa1b --model SAM --edge_filter 1 \
+                    --crop_mask 1 --sparsity $sparsity --experiment filter_ --pruning_method sparsegpt
 done

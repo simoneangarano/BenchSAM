@@ -88,6 +88,15 @@ def save_analytics(cfg):
     df_0s.to_pickle(f"analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
     df_0s.head()
 
+def get_summary(cfg):
+    df = pd.read_pickle(f"analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
+    summary = {'id': cfg['SPARSITY'] if cfg['SPARSITY'] != 0 else cfg['MODEL']}
+    for k in ['iou', 'mask_size_diff', 'score_diff', 'precision', 'recall']:
+        summary[k] = df[k].mean()
+        summary[k+'_std'] = df[k].std()
+        summary[k+'_hist'] = np.histogram(df[k], bins='sturges')
+    return summary
+
 
 
 ### Visualization ###
@@ -217,6 +226,24 @@ def show_entry(row, target_df, pred_df, cfg):
 def show_samples(pie_df, target_df, pred_df, n=5):
     print('Legend: Target -> Orange, Prediction -> Blue')
     pie_df.iloc[:n].apply(lambda x: show_entry(x, target_df, pred_df), axis=1)
+
+def get_hists(summary, cfg, save=True, plot=True):
+    if cfg['SPARSITY'] != 0:
+        fig, axs = plt.subplots(3, 3, sharex=True, sharey='row', figsize=(10,8))
+        title = "% Sparsity"
+    else:
+        fig, axs = plt.subplots(1, 2, sharex=True, sharey='row', figsize=(10,3))
+        title = ""
+    for (axs, i) in zip(axs.flat, range(len(summary))):
+        y, x = summary.iloc[i][f"{cfg['METRIC']}_hist"]
+        axs.bar(x[:-1], y, width=x[1]-x[0], alpha=1)
+        axs.set_title(f"{summary.iloc[i]['id']}{title}", fontsize=10)
+        axs.semilogy()
+    plt.suptitle(f"{cfg['METRIC'].upper()} Distribution", fontsize=12)
+    if save:
+        plt.savefig(f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}{cfg['MODE']}_{cfg['METRIC']}.pdf")
+    if plot:
+        plt.show()
 
 
 
