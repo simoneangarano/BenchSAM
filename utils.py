@@ -9,6 +9,24 @@ import pycocotools
 
 
 
+### Constants ###
+
+METRICS = ['iou', 'mask_size_diff', 'score_diff', 'precision', 'recall']
+MODELS = ['SAM', 'FastSAM', 'MobileSAM']
+SPARSITIES = [10, 20, 30, 40, 50, 60, 70, 80, 90]
+MODES = ['', '_gup']
+PARAMS = {'SAM': 615e6,
+          'FastSAM': 68e6,
+          'MobileSAM': 9.66e6}
+SAM = {'iou': 1.0,
+       'mask_size_diff': 0.0,
+       'score_diff': 0.0,
+       'precision': 1.0,
+       'recall': 1.0}
+C = [[0.00, 0.65, 0.88, 0.6],[0.95, 0.47, 0.13, 0.6]]
+
+
+
 ### Metrics ###
 
 def get_metrics(target, pred, eps=1e-5, verbose=False):
@@ -90,7 +108,8 @@ def save_analytics(cfg):
 
 def get_summary(cfg):
     df = pd.read_pickle(f"analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
-    summary = {'id': cfg['SPARSITY'] if cfg['SPARSITY'] != 0 else cfg['MODEL']}
+    summary = {'id': cfg['SPARSITY'] if cfg['SPARSITY'] != 0 else cfg['MODEL'],
+               'pruning': cfg['MODE']}
     for k in ['iou', 'mask_size_diff', 'score_diff', 'precision', 'recall']:
         summary[k] = df[k].mean()
         summary[k+'_std'] = df[k].std()
@@ -100,8 +119,6 @@ def get_summary(cfg):
 
 
 ### Visualization ###
-
-C = [[0.00, 0.65, 0.88, 0.6],[0.95, 0.47, 0.13, 0.6]]
 
 def show_mask(mask, ax, random_color=False, color=None):
     if random_color:
@@ -244,8 +261,50 @@ def get_hists(summary, cfg, save=True, plot=True):
         plt.savefig(f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}{cfg['MODE']}_{cfg['METRIC']}.pdf")
     if plot:
         plt.show()
+    else:
+        plt.clf()
 
+def get_curves(s, cfg, std=False, plot=True, save=False):
+    gup = s[s['pruning']=='_gup']
+    fsam = s[s['id']=='FastSAM']
+    msam = s[s['id']=='MobileSAM']
+    sgpt = s[s['id'].str.isalpha().isnull()][s['pruning']!='_gup']
 
+    _, ax = plt.subplots()
+    ax.grid()
+    ax.title.set_text(cfg['METRIC'].replace('_', ' ').capitalize())
+    ax.errorbar(PARAMS['SAM'], SAM[cfg['METRIC']], fmt='o', label='SAM')
+
+    _, c, b = ax.errorbar((1 - gup['id']/100) * PARAMS['SAM'], gup[cfg['METRIC']], 
+                          yerr=gup[cfg['METRIC']+'_std'] if std else None, xerr=None,
+                          fmt='-o', capsize=2, capthick=2, label='Unstructured')
+    [bar.set_alpha(0.5) for bar in b]
+    [cap.set_alpha(0.5) for cap in c]
+    _, c, b = ax.errorbar((1 - sgpt['id']/100) * PARAMS['SAM'], sgpt[cfg['METRIC']], 
+                          yerr=sgpt[cfg['METRIC']+'_std'] if std else None, xerr=None,
+                          fmt='-o', capsize=2, capthick=2, label='SparseGPT')
+    [bar.set_alpha(0.5) for bar in b]
+    [cap.set_alpha(0.5) for cap in c]
+    _, c, b = ax.errorbar(PARAMS['FastSAM'], fsam[cfg['METRIC']], 
+                          yerr=fsam[cfg['METRIC']+'_std'] if std else None, xerr=None,
+                          fmt='o', capsize=2, capthick=2, label='FastSAM')
+    [bar.set_alpha(0.5) for bar in b]
+    [cap.set_alpha(0.5) for cap in c]
+    _, c, b = ax.errorbar(PARAMS['MobileSAM'], msam[cfg['METRIC']], 
+                          yerr=msam[cfg['METRIC']+'_std'] if std else None, xerr=None,
+                          fmt='o', capsize=2, capthick=2, label='MobileSAM')
+    [bar.set_alpha(0.5) for bar in b]
+    [cap.set_alpha(0.5) for cap in c]
+    plt.legend(loc='best')
+    plt.xlabel('Parameters')
+    plt.ylabel(cfg['METRIC'].replace('_', ' ').capitalize())
+    plt.axvline(PARAMS['SAM'], linestyle='--')
+    plt.axhline(SAM[cfg['METRIC']], linestyle='--')
+    plt.semilogx()
+    if save:
+        plt.savefig(f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['METRIC']}_curves.pdf", bbox_inches='tight')
+    if plot:
+        plt.show()
 
 ### Data Helpers ###
 

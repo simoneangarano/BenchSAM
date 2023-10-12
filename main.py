@@ -1,6 +1,7 @@
 import argparse, random, warnings
 from pathlib import Path
 from tqdm import tqdm
+import gc
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,7 @@ from mobile_sam import sam_model_registry, SamPredictor
 from utils import get_mask_limits
 
 warnings.simplefilter('ignore', FutureWarning)
-
+gc.collect()
 
 
 class SinglePointInferenceEngine:
@@ -190,7 +191,7 @@ def main():
     parser.add_argument('--crop_size', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=8)
-    parser.add_argument('--pin_memory', type=bool, default=True)
+    parser.add_argument('--pin_memory', type=bool, default=False)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--cuda', type=int, default=0)
 
@@ -233,6 +234,9 @@ def main():
         out_file = spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}_{args.sparsity}{p}.pkl')
         df.to_pickle(out_file)
         print(f'Results saved! {out_file}')
+
+        del df, spie
+        gc.collect()
 
 if __name__ == '__main__':
     main()
