@@ -1,11 +1,12 @@
-import sys, logging
 from pathlib import Path
-import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import pandas as pd
 import pycocotools
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 
 
 
@@ -135,7 +136,7 @@ def show_mask(mask, ax, random_color=False, color=None):
         color = np.array([30/255, 144/255, 255/255, 0.6])
     h, w = mask.shape[-2:]
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    ax.imshow(mask_image)
+    ax.imshow(mask_image, interpolation='nearest')
 
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
@@ -193,21 +194,24 @@ def get_mask_limits(masks):
 
   return np.min(bb[:,:2], axis=0).tolist(), np.max(bb[:,2:], axis=0).tolist(), mask
 
-def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=None, zoom=True):
+def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=None, zoom=True, prompt_zoom=False, thr=5):
     plt.figure(figsize=(5,5))
     plt.imshow(raw_image, alpha=0.6)
     input_points = np.array(input_points)
     if input_labels is None:
-      labels = np.ones_like(input_points[:, 0])
+        labels = np.ones_like(input_points[:, 0])
     else:
-      labels = np.array(input_labels)
+        labels = np.array(input_labels)
     show_points(input_points, labels, plt.gca()) 
     for i, m in enumerate(masks):
-      show_mask(m, plt.gca(), color=C[i])
-    if zoom:
-      min, max, _ = get_mask_limits(masks)
-      plt.xlim(min[0], max[0])
-      plt.ylim(max[1], min[1])
+        show_mask(m, plt.gca(), color=C[i])
+    if prompt_zoom:
+        plt.xlim(input_points[:,0]-thr, input_points[:,0]+thr)
+        plt.ylim(input_points[:,1]+thr, input_points[:,1]-thr)
+    elif zoom:
+        min, max, _ = get_mask_limits(masks)
+        plt.xlim(min[0], max[0])
+        plt.ylim(max[1], min[1])
     plt.axis('off')
     plt.show()
 
@@ -234,21 +238,23 @@ def show_masks_on_image(raw_image, masks, scores):
       axes[i].axis("off")
     plt.show()
 
-def show_entry(row, target_df, pred_df, cfg):
-    image = get_image(row['name'])
+def show_entry(row, target_df, pred_df, cfg, zoom=True, prompt_zoom=False):
+    image = get_image(row['name'], cfg)
     target_mask = target_df[target_df['name']==row['name']]['mask'].values[0]
     pred_mask = pred_df[pred_df['name']==row['name']]['mask'].values[0]
     if cfg['DATASET'] == 'sa1b':
         pred_mask = get_full_mask(pred_mask, pred_df[pred_df['name']==row['name']]['mask_origin'].values[0], image.shape[:2])
         target_mask = get_full_mask(target_mask, target_df[target_df['name']==row['name']]['mask_origin'].values[0], image.shape[:2])
 
-    show_points_and_masks_on_image(image, [pred_mask, target_mask], [row['prompt']])
-    print(f'ID: {row["name"]}, PromptClass: {get_labels(row["class"])}, TargetClass: {get_labels(row["t_class"])}, PredClass: {get_labels(row["s_class"])},') 
-    print(f'ScoreDiff: {row["score_diff"]:.4f}, MaskSizeDiff: {row["mask_size_diff"]:.4f}, IoU: {row["iou"]:.4f}')
+    show_points_and_masks_on_image(image, [pred_mask, target_mask], [row['prompt']], zoom=zoom, prompt_zoom=prompt_zoom)
+    print(f'ID: {row["name"]}, PromptClass: {get_labels(row["class"], cfg)},' 
+          'TargetClass: {get_labels(row["t_class"], cfg)}, PredClass: {get_labels(row["s_class"], cfg)},') 
+    print(f'ScoreDiff: {row["score_diff"]:.4f}, MaskSizeDiff: {row["mask_size_diff"]:.4f}, IoU: {row["iou"]:.4f}, '
+          f'Precision: {row["precision"]:.4f}, Recall: {row["recall"]:.4f}')
     
-def show_samples(pie_df, target_df, pred_df, n=5):
+def show_samples(pie_df, target_df, pred_df, cfg, n=5, zoom=True, prompt_zoom=False):
     print('Legend: Target -> Orange, Prediction -> Blue')
-    pie_df.iloc[:n].apply(lambda x: show_entry(x, target_df, pred_df), axis=1)
+    pie_df.iloc[:n].apply(lambda x: show_entry(x, target_df, pred_df, cfg, zoom=zoom, prompt_zoom=prompt_zoom), axis=1)
 
 def get_hists(summary, cfg, save=True, plot=True):
     if len(summary) == 9:
@@ -314,6 +320,66 @@ def get_curves(s, cfg, std=False, plot=True, save=False):
         plt.savefig(f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['METRIC']}_curves.pdf", bbox_inches='tight')
     if plot:
         plt.show()
+
+def get_clusters(data, cfg, plot=False, save=False):
+    (n_samples, n_features), n = data.shape, 3
+    print(f"#: {n}; # samples: {n_samples}; # features {n_features}")
+
+    data_scaled = StandardScaler().fit_transform(data)
+    reduced_data = PCA(n_components=2).fit_transform(data_scaled)
+    kmeans = KMeans(init="k-means++", n_clusters=n, n_init=4)
+    kmeans.fit(reduced_data)
+
+    h = 0.02  # point in the mesh [x_min, x_max]x[y_min, y_max].
+
+    # Plot the decision boundary. For that, we will assign a color to each
+    x_min, x_max = reduced_data[:, 0].min() - 1, reduced_data[:, 0].max() + 1
+    y_min, y_max = reduced_data[:, 1].min() - 1, reduced_data[:, 1].max() + 1
+    xx, yy = np.meshgrid(np.arange(x_min, x_max, h), np.arange(y_min, y_max, h))
+
+    # Obtain labels for each point in mesh. Use last trained model.
+    Z = kmeans.predict(np.c_[xx.ravel(), yy.ravel()])
+
+    # Put the result into a color plot
+    Z = Z.reshape(xx.shape)
+    plt.figure(1)
+    plt.clf()
+    plt.imshow(
+        Z,
+        interpolation="nearest",
+        extent=(xx.min(), xx.max(), yy.min(), yy.max()),
+        cmap=plt.colormaps["Reds"],
+        aspect="auto",
+        origin="lower",
+        alpha=0.3
+    )
+    plt.scatter(reduced_data[:, 0], reduced_data[:, 1], c=data[:,0])
+    # Plot the centroids as a white X
+    centroids = kmeans.cluster_centers_
+    plt.scatter(
+        centroids[:, 0],
+        centroids[:, 1],
+        marker="x",
+        s=50,
+        linewidths=3,
+        color="w",
+        zorder=10,
+    )
+    plt.title(
+        "K-means clustering on the dataset (PCA-reduced data)\n"
+        "Centroids are marked with white cross"
+    )
+    plt.xlim(x_min, x_max)
+    plt.ylim(y_min, y_max)
+    plt.xticks(())
+    plt.yticks(())
+    if save:
+        plt.savefig(f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}_kmeans.pdf", bbox_inches='tight')
+    if plot:
+        plt.show()
+    else:
+        plt.clf()
+    return kmeans.labels_
 
 
 
@@ -424,15 +490,15 @@ def get_full_mask(mask, origin, full_shape):
     full_mask[origin[0]:origin[0]+mask.shape[0], origin[1]:origin[1]+mask.shape[1]] = mask
     return full_mask
 
-def add_image_shape(df):
-    df['shape'] = df['name'].apply(lambda x: get_image(x).shape[:2])
+def add_image_shape(df, cfg):
+    df['shape'] = df['name'].apply(lambda x: get_image(x, cfg).shape[:2])
     return df
 
 def get_labels(name, cfg):
     if name is None:
         return 'None'
     elif isinstance(name, list):
-        return [get_labels(n) for n in name]
+        return [get_labels(n, cfg) for n in name]
     else: 
         return cfg['CLASSES'][name].title()
 

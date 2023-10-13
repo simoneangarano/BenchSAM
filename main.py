@@ -170,8 +170,6 @@ class SinglePointInferenceEngine:
                 p_class_list.append(int(p_class))
                 s_class_list.append(list(self.get_pred_classes(mask, l)))
 
-            gc.collect()
-
         if self.prompts is None:
             self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list,
                                          'image_shape': shape_list})
