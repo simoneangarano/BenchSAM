@@ -106,15 +106,21 @@ def save_analytics(cfg):
     df_0s.to_pickle(f"analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
     df_0s.head()
 
-def get_summary(cfg):
+def get_summary(cfg, classwise=False):
     df = pd.read_pickle(f"analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
-    summary = {'id': cfg['SPARSITY'] if cfg['SPARSITY'] != 0 else cfg['MODEL'],
-               'pruning': cfg['MODE']}
-    for k in ['iou', 'mask_size_diff', 'score_diff', 'precision', 'recall']:
-        summary[k] = df[k].mean()
-        summary[k+'_std'] = df[k].std()
-        summary[k+'_hist'] = np.histogram(df[k], bins='sturges')
-    return summary
+    df = add_superclass(df, cfg) if classwise else df
+    classes = cfg['SUP_N'].values() if classwise else [-1]
+    sums = []
+    for c in classes:
+        df_c = df[df['superclass']==c] if classwise else df
+        summary = {'id': cfg['SPARSITY'] if cfg['SPARSITY'] != 0 else cfg['MODEL'],
+                   'pruning': cfg['MODE'], 'class': c, 'n': len(df_c)}
+        for k in ['iou', 'mask_size_diff', 'score_diff', 'precision', 'recall']:
+            summary[k] = df_c[k].mean()
+            summary[k+'_std'] = df_c[k].std()
+            summary[k+'_hist'] = np.histogram(df_c[k], bins='sturges')
+        sums.append(summary)
+    return pd.DataFrame(sums)
 
 
 
@@ -245,16 +251,19 @@ def show_samples(pie_df, target_df, pred_df, n=5):
     pie_df.iloc[:n].apply(lambda x: show_entry(x, target_df, pred_df), axis=1)
 
 def get_hists(summary, cfg, save=True, plot=True):
-    if cfg['SPARSITY'] != 0:
+    if len(summary) == 9:
         fig, axs = plt.subplots(3, 3, sharex=True, sharey='row', figsize=(10,8))
         title = "% Sparsity"
-    else:
+    elif len(summary) == 2:
         fig, axs = plt.subplots(1, 2, sharex=True, sharey='row', figsize=(10,3))
         title = ""
+    elif len(summary) == 12:
+        fig, axs = plt.subplots(4, 3, sharex=True, sharey=True, figsize=(12,8))
+        title = " Class"
     for (axs, i) in zip(axs.flat, range(len(summary))):
         y, x = summary.iloc[i][f"{cfg['METRIC']}_hist"]
         axs.bar(x[:-1], y, width=x[1]-x[0], alpha=1)
-        axs.set_title(f"{summary.iloc[i]['id']}{title}", fontsize=10)
+        axs.set_title(f"{summary.iloc[i]['class']}{title}", fontsize=10)
         axs.semilogy()
     plt.suptitle(f"{cfg['METRIC'].upper()} Distribution", fontsize=12)
     if save:
@@ -306,6 +315,8 @@ def get_curves(s, cfg, std=False, plot=True, save=False):
     if plot:
         plt.show()
 
+
+
 ### Data Helpers ###
 
 def get_dataset_info(dataset):
@@ -320,17 +331,49 @@ def get_dataset_info(dataset):
                    'potted plant', 'bed', 'mirror', 'dining table', 'window', 'desk', 'toilet', 'door', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
                    'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'blender', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
                    'hair drier', 'toothbrush', 'hair brush']
+        superclasses = ('background', 
+                        'person', 
+                        'vehicle', 'vehicle', 'vehicle', 'vehicle', 'vehicle', 'vehicle', 'vehicle', 'vehicle', 
+                        'outdoor', 'outdoor', 'outdoor', 'outdoor', 'outdoor', 'outdoor', 
+                        'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 
+                        'accessory', 'accessory', 'accessory', 'accessory', 'accessory', 'accessory', 'accessory', 'accessory', 
+                        'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 
+                        'kitchen', 'kitchen', 'kitchen', 'kitchen', 'kitchen', 'kitchen', 'kitchen', 'kitchen', 
+                        'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 
+                        'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 
+                        'electronic', 'electronic', 'electronic', 'electronic', 'electronic', 'electronic', 
+                        'appliance', 'appliance', 'appliance', 'appliance', 'appliance', 'appliance',
+                        'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor')
+        superclasses_n = {'background': 0,
+                          'person': 1,
+                          'vehicle': 2,
+                          'outdoor': 3,
+                          'animal': 4,
+                          'accessory': 5,
+                          'sports': 6,
+                          'kitchen': 7,
+                          'food': 8,
+                          'furniture': 9,
+                          'electronic': 10,
+                          'appliance': 11,
+                          'indoor': 12}
+        
     elif dataset == 'cityscapes':
         root = Path("../Datasets/Cityscapes/leftImg8bit/val/")
         n = 19
         classes = ['Road', 'Sidewalk', 'Building', 'Wall', 'Fence', 'Pole', 'Traffic Light', 'Traffic Sign', 'Vegetation', 
                    'Terrain', 'Sky', 'Person', 'Rider', 'Car', 'Truck', 'Bus', 'Train', 'Motorcycle', 'Bicycle']
+        superclasses = classes
+        superclasses_n = {c: i for i, c in enumerate(classes)}
+
     elif dataset == 'sa1b':
         root = Path("../Datasets/SA_1B/images/")
         n = 0
         classes = []
+        superclasses = []
+        superclasses_n = {}
     
-    return root, n, classes
+    return root, n, classes, superclasses, superclasses_n
 
 def annToRLE(im, ann):
     """
@@ -365,6 +408,16 @@ def annToMask(im, ann):
 
 
 ### Utils ###
+
+def get_superclass(c, cfg):
+    return cfg['SUP_N'][cfg['SUPERCLASSES'][c]]
+
+def add_superclass(df, cfg):
+    if cfg['DATASET'] == 'coco':
+        df['superclass'] = df['class'].apply(lambda x: get_superclass(x, cfg))
+    else:
+        df['superclass'] = df['class']
+    return df
 
 def get_full_mask(mask, origin, full_shape):
     full_mask = np.zeros(full_shape)

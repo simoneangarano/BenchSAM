@@ -219,7 +219,6 @@ class CitySegmentation(SegmentationDataset):
                 # 'Void'         # -1, 0, 1, 2, 3, 4, 5, 6, 9, 10, 14, 15, 16, 18, 29, 30
                 )
 
-
 def _get_city_pairs(folder, split='train'):
     def get_path_pairs(img_folder, mask_folder):
         img_paths = []
@@ -384,25 +383,36 @@ class COCOSegmentation(SegmentationDataset):
     @property
     def classes(self):
         """Category names."""
-        return ('background', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
-                'street sign', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 
-                'hat', 'backpack', 'umbrella', 'shoe', 'eye glasses', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports', 'kite', 
-                'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'plate', 'wine glass', 'cup', 'fork', 'knife', 
-                'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-                'potted plant', 'bed', 'mirror', 'dining table', 'window', 'desk', 'toilet', 'door', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
-                'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'blender', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
-                'hair drier', 'toothbrush', 'hair brush')
+        return ('background', 
+                'person', 
+                'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 
+                'traffic light', 'fire hydrant', 'street sign', 'stop sign', 'parking meter', 'bench', 
+                'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 
+                'hat', 'backpack', 'umbrella', 'shoe', 'eye glasses', 'handbag', 'tie', 'suitcase', 
+                'frisbee', 'skis', 'snowboard', 'sports', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 
+                'bottle', 'plate', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 
+                'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 
+                'chair', 'couch', 'potted plant', 'bed', 'mirror', 'dining table', 'window', 'desk', 'toilet', 'door', 
+                'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 
+                'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'blender', 
+                'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush', 'hair brush')
+    
+    def superclasses(self):
+        return ('background', 
+                'person', 
+                'vehicle', 'vehicle', 'vehicle', 'vehicle', 'vehicle', 'vehicle', 'vehicle', 'vehicle', 
+                'outdoor', 'outdoor', 'outdoor', 'outdoor', 'outdoor', 'outdoor', 
+                'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 'animal', 
+                'accessory', 'accessory', 'accessory', 'accessory', 'accessory', 'accessory', 'accessory', 'accessory', 
+                'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 'sports', 
+                'kitchen', 'kitchen', 'kitchen', 'kitchen', 'kitchen', 'kitchen', 'kitchen', 'kitchen', 
+                'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 
+                'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 'furniture', 
+                'electronic', 'electronic', 'electronic', 'electronic', 'electronic', 'electronic', 
+                'appliance', 'appliance', 'appliance', 'appliance', 'appliance', 'appliance',
+                'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor')
     
 
-
-
-# Copyright 2023 Simone Angarano 
-# https://simoneangarano.github.io
-# All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
 class SA1B_Dataset(torchvision.datasets.ImageFolder):
     """A data loader for the SA-1B Dataset from "Segment Anything" (SAM)
