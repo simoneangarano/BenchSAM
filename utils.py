@@ -127,7 +127,7 @@ def get_summary(cfg, classwise=False):
 
 ### Visualization ###
 
-def show_mask(mask, ax, random_color=False, color=None):
+def show_mask(mask, ax, random_color=False, color=None, alpha=0.6):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     elif color is not None:
@@ -177,24 +177,7 @@ def show_points_and_boxes_on_image(raw_image, boxes, input_points, input_labels=
     plt.axis('on')
     plt.show()
 
-def get_mask_limits(masks):
-  if len(masks) == 0:
-    return np.zeros((0, 4), dtype=int)
-  n = len(masks)
-  bb = np.zeros((n, 4), dtype=int)
-  for index, mask in enumerate(masks):
-      if not mask.any():
-          continue
-      y, x = np.where(mask != 0)
-      bb[index, 0] = np.min(x)
-      bb[index, 1] = np.min(y)
-      bb[index, 2] = np.max(x)
-      bb[index, 3] = np.max(y)
-      mask = mask[bb[index, 1]:bb[index, 3], bb[index, 0]:bb[index, 2]]
-
-  return np.min(bb[:,:2], axis=0).tolist(), np.max(bb[:,2:], axis=0).tolist(), mask
-
-def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=None, zoom=True, prompt_zoom=False, thr=5):
+def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=None, zoom=True, prompt_zoom=False, thr=5, save=None):
     plt.figure(figsize=(5,5))
     plt.imshow(raw_image, alpha=0.6)
     input_points = np.array(input_points)
@@ -204,7 +187,7 @@ def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=
         labels = np.array(input_labels)
     show_points(input_points, labels, plt.gca()) 
     for i, m in enumerate(masks):
-        show_mask(m, plt.gca(), color=C[i])
+        show_mask(m, plt.gca(), color=C[i], alpha=0.8)
     if prompt_zoom:
         plt.xlim(input_points[:,0]-thr, input_points[:,0]+thr)
         plt.ylim(input_points[:,1]+thr, input_points[:,1]-thr)
@@ -213,6 +196,8 @@ def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=
         plt.xlim(min[0], max[0])
         plt.ylim(max[1], min[1])
     plt.axis('off')
+    if save is not None:
+        plt.savefig(save, bbox_inches='tight')
     plt.show()
 
 def show_points(coords, labels, ax, marker_size=100):
@@ -238,7 +223,7 @@ def show_masks_on_image(raw_image, masks, scores):
       axes[i].axis("off")
     plt.show()
 
-def show_entry(row, target_df, pred_df, cfg, zoom=True, prompt_zoom=False):
+def show_entry(row, target_df, pred_df, cfg, zoom=True, prompt_zoom=False, save=None):
     image = get_image(row['name'], cfg)
     target_mask = target_df[target_df['name']==row['name']]['mask'].values[0]
     pred_mask = pred_df[pred_df['name']==row['name']]['mask'].values[0]
@@ -246,34 +231,44 @@ def show_entry(row, target_df, pred_df, cfg, zoom=True, prompt_zoom=False):
         pred_mask = get_full_mask(pred_mask, pred_df[pred_df['name']==row['name']]['mask_origin'].values[0], image.shape[:2])
         target_mask = get_full_mask(target_mask, target_df[target_df['name']==row['name']]['mask_origin'].values[0], image.shape[:2])
 
-    show_points_and_masks_on_image(image, [pred_mask, target_mask], [row['prompt']], zoom=zoom, prompt_zoom=prompt_zoom)
+    show_points_and_masks_on_image(image, [pred_mask, target_mask], [row['prompt']], zoom=zoom, prompt_zoom=prompt_zoom, save=save)
     print(f'ID: {row["name"]}, PromptClass: {get_labels(row["class"], cfg)},' 
           'TargetClass: {get_labels(row["t_class"], cfg)}, PredClass: {get_labels(row["s_class"], cfg)},') 
     print(f'ScoreDiff: {row["score_diff"]:.4f}, MaskSizeDiff: {row["mask_size_diff"]:.4f}, IoU: {row["iou"]:.4f}, '
           f'Precision: {row["precision"]:.4f}, Recall: {row["recall"]:.4f}')
     
-def show_samples(pie_df, target_df, pred_df, cfg, n=5, zoom=True, prompt_zoom=False):
+def show_samples(pie_df, target_df, pred_df, cfg, n=5, zoom=True, prompt_zoom=False, random=False, save=False):
     print('Legend: Target -> Orange, Prediction -> Blue')
-    pie_df.iloc[:n].apply(lambda x: show_entry(x, target_df, pred_df, cfg, zoom=zoom, prompt_zoom=prompt_zoom), axis=1)
+    pie_df = pie_df.sample(n, random_state=0) if random else pie_df[:n]
+    if save:
+        def save(x):
+            x -= 1
+            return f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}_{x}.pdf"
+    else:
+        save = lambda x: None
+    pie_df.apply(lambda x: show_entry(x, target_df, pred_df, cfg, zoom=zoom, prompt_zoom=prompt_zoom, save=save(n)), axis=1)
 
 def get_hists(summary, cfg, save=True, plot=True):
     if len(summary) == 9:
         fig, axs = plt.subplots(3, 3, sharex=True, sharey='row', figsize=(10,8))
         title = "% Sparsity"
+        j = "id"
     elif len(summary) == 2:
         fig, axs = plt.subplots(1, 2, sharex=True, sharey='row', figsize=(10,3))
         title = ""
+        j = "id"
     elif len(summary) == 12:
         fig, axs = plt.subplots(4, 3, sharex=True, sharey=True, figsize=(12,8))
         title = " Class"
+        j = "class"
     for (axs, i) in zip(axs.flat, range(len(summary))):
         y, x = summary.iloc[i][f"{cfg['METRIC']}_hist"]
         axs.bar(x[:-1], y, width=x[1]-x[0], alpha=1)
-        axs.set_title(f"{summary.iloc[i]['class']}{title}", fontsize=10)
+        axs.set_title(f"{summary.iloc[i][j]}{title}", fontsize=10)
         axs.semilogy()
     plt.suptitle(f"{cfg['METRIC'].upper()} Distribution", fontsize=12)
     if save:
-        plt.savefig(f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}{cfg['MODE']}_{cfg['METRIC']}.pdf")
+        plt.savefig(f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}{cfg['MODE']}_{cfg['METRIC']}.pdf", bbox_inches='tight')
     if plot:
         plt.show()
     else:
@@ -283,7 +278,8 @@ def get_curves(s, cfg, std=False, plot=True, save=False):
     gup = s[s['pruning']=='_gup']
     fsam = s[s['id']=='FastSAM']
     msam = s[s['id']=='MobileSAM']
-    sgpt = s[s['id'].str.isalpha().isnull()][s['pruning']!='_gup']
+    sgpt = s[s['id'].str.isalpha().isnull()]
+    sgpt = sgpt[sgpt['pruning']!='_gup']
 
     _, ax = plt.subplots()
     ax.grid()
@@ -510,3 +506,20 @@ def get_image(name, cfg):
     elif cfg['DATASET'] == 'sa1b':
         image_path = cfg['ROOT'].joinpath(f"0/{name}.jpg")
     return np.array(Image.open(image_path).convert("RGB"))
+
+def get_mask_limits(masks):
+  if len(masks) == 0:
+    return np.zeros((0, 4), dtype=int)
+  n = len(masks)
+  bb = np.zeros((n, 4), dtype=int)
+  for index, mask in enumerate(masks):
+      if not mask.any():
+          continue
+      y, x = np.where(mask != 0)
+      bb[index, 0] = np.min(x)
+      bb[index, 1] = np.min(y)
+      bb[index, 2] = np.max(x)
+      bb[index, 3] = np.max(y)
+      mask = mask[bb[index, 1]:bb[index, 3], bb[index, 0]:bb[index, 2]]
+
+  return np.min(bb[:,:2], axis=0).tolist(), np.max(bb[:,2:], axis=0).tolist(), mask
