@@ -29,7 +29,7 @@ SAM = {'iou': 1.0,
        'score_diff': 0.0,
        'precision': 1.0,
        'recall': 1.0}
-C = [[0.00, 0.65, 0.88, 0.6],[0.95, 0.47, 0.13, 0.6]]
+C = [[0.00, 0.65, 0.88, 0.6],[0.95, 0.47, 0.13, 0.4]]
 
 
 
@@ -228,7 +228,7 @@ def show_masks_on_image(raw_image, masks, scores):
       axes[i].axis("off")
     plt.show()
 
-def show_entry(row, target_df, pred_df, cfg, zoom=True, prompt_zoom=False, save=None):
+def show_entry(row, target_df, pred_df, cfg, zoom=True, prompt_zoom=False, thr=5, save=None):
     image = get_image(row['name'], cfg)
     target_mask = target_df[target_df['name']==row['name']]['mask'].values[0]
     pred_mask = pred_df[pred_df['name']==row['name']]['mask'].values[0]
@@ -236,22 +236,25 @@ def show_entry(row, target_df, pred_df, cfg, zoom=True, prompt_zoom=False, save=
         pred_mask = get_full_mask(pred_mask, pred_df[pred_df['name']==row['name']]['mask_origin'].values[0], image.shape[:2])
         target_mask = get_full_mask(target_mask, target_df[target_df['name']==row['name']]['mask_origin'].values[0], image.shape[:2])
 
-    show_points_and_masks_on_image(image, [pred_mask, target_mask], [row['prompt']], zoom=zoom, prompt_zoom=prompt_zoom, save=save)
-    print(f'ID: {row["name"]}, PromptClass: {get_labels(row["class"], cfg)},' 
-          'TargetClass: {get_labels(row["t_class"], cfg)}, PredClass: {get_labels(row["s_class"], cfg)},') 
-    print(f'ScoreDiff: {row["score_diff"]:.4f}, MaskSizeDiff: {row["mask_size_diff"]:.4f}, IoU: {row["iou"]:.4f}, '
-          f'Precision: {row["precision"]:.4f}, Recall: {row["recall"]:.4f}')
-    
-def show_samples(pie_df, target_df, pred_df, cfg, n=5, zoom=True, prompt_zoom=False, random=False, save=False):
+    show_points_and_masks_on_image(image, [pred_mask, target_mask], [row['prompt']], zoom=zoom, thr=thr, prompt_zoom=prompt_zoom, save=save)
+    print(f'ID: {row["name"]}, PromptClass: {get_labels(row["class"], cfg)}, ' 
+          f'TargetClass: {get_labels(row["t_class"], cfg)}, PredClass: {get_labels(row["s_class"], cfg)},') 
+    try:
+        print(f'ScoreDiff: {row["score_diff"]:.4f}, MaskSizeDiff: {row["mask_size_diff"]:.4f}, IoU: {row["iou"]:.4f}, '
+              f'Precision: {row["precision"]:.4f}, Recall: {row["recall"]:.4f}')
+    except:
+        return
+
+def show_samples(pie_df, target_df, pred_df, cfg, n=5, zoom=True, prompt_zoom=False, thr=5, random=False, save=False):
     print('Legend: Target -> Orange, Prediction -> Blue')
-    pie_df = pie_df.sample(n, random_state=0) if random else pie_df[:n]
+    pie_df = pie_df.sample(n) if random else pie_df[:n]
     if save:
         def save(x):
             x -= 1
             return f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}_{x}.pdf"
     else:
         save = lambda x: None
-    pie_df.apply(lambda x: show_entry(x, target_df, pred_df, cfg, zoom=zoom, prompt_zoom=prompt_zoom, save=save(n)), axis=1)
+    pie_df.apply(lambda x: show_entry(x, target_df, pred_df, cfg, zoom=zoom, prompt_zoom=prompt_zoom, thr=thr, save=save(n)), axis=1)
 
 def get_hists(summary, cfg, save=True, plot=True):
     if len(summary) == 9:
@@ -530,7 +533,20 @@ def get_mask_limits(masks):
 
   return np.min(bb[:,:2], axis=0).tolist(), np.max(bb[:,2:], axis=0).tolist(), mask
 
+def check_prompt(sample):
+    prompt = sample['prompt']
+    mask = sample['mask']
+    # If the mask is empty, it is to be considered (no mask predicted)
+    if mask.sum() == 0:
+        return 1
+    # If the prompt is not in the mask, it is not to be considered (SAM's bug)
+    if mask[prompt[1], prompt[0]] == 0:
+        return 0
+    return 1
 
+
+
+### Other ###
 class ResizeLongestSide:
     """
     Resizes images to the longest side 'target_length', as well as provides

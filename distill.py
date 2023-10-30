@@ -1,4 +1,5 @@
 from pathlib import Path
+from tqdm import tqdm
 
 import torch
 from transformers import (SamModel, SamProcessor)
@@ -29,13 +30,17 @@ class Distiller():
 
         return torch.nn.functional.mse_loss(s_features, t_features)
 
-    def distill(self):
-        for i, (img, _, _) in enumerate(self.dataloader):
-            self.optimizer.zero_grad()
-            loss = self.get_distillation_loss(img)
-            loss.backward()
-            self.optimizer.step()
-            print(f"Step {i+1}/{len(self.dataloader)}: Loss {loss.item():.4f}")
+    def distill(self, epochs=5, batch_size=4):
+        for _ in range(epochs):
+            t = tqdm(self.dataloader, desc='Distillation')
+            for i, (img, _, _) in enumerate(t):
+                loss = self.get_distillation_loss(img) / batch_size
+                loss.backward()
+                if (i+1) % batch_size == 0 or i+1 == len(self.dataloader):
+                    self.optimizer.step()
+                    t.set_postfix({'Loss':loss.item()})
+                    self.optimizer.zero_grad()
+
 
 
 
@@ -61,8 +66,7 @@ def main():
     distiller = Distiller(teacher, student, processor, dataloader, optimizer, DEVICE)
 
     distiller.distill()
-    distiller.student.model.save_model("bin/mobile_sam_distilled.pt")
-
+    torch.save(distiller.student.model.state_dict(), 'bin/distilled_mobile_sam.pt')
 
 
 if __name__ == "__main__":
