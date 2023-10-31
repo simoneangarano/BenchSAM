@@ -18,6 +18,7 @@ warnings.simplefilter('ignore', FutureWarning)
 gc.collect()
 
 
+
 class SinglePointInferenceEngine:
     def __init__(self, args, device):
         self.args = args
@@ -35,9 +36,7 @@ class SinglePointInferenceEngine:
             print('Random Prompts...') 
 
         self.get_dataloader()
-        print('Dataloader initialized...')
         self.get_model()
-        print('Model initialized...')
 
 
     def get_dataloader(self):
@@ -56,6 +55,7 @@ class SinglePointInferenceEngine:
         self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.args.batch_size, shuffle=False, 
                                                       num_workers=self.args.num_workers, pin_memory=self.args.pin_memory, worker_init_fn=None)
 
+
     def get_model(self):
         if self.args.model == 'SAM':
             if self.args.sparsity > 0:
@@ -69,7 +69,9 @@ class SinglePointInferenceEngine:
                 self.model = SamModel.from_pretrained('facebook/sam-vit-huge').to(self.device).eval()
             self.processor = SamProcessor.from_pretrained('facebook/sam-vit-huge')
         elif self.args.model == 'MobileSAM':
-            sam_checkpoint = self.model_dir.joinpath("mobile_sam.pt")
+            weights = self.args.weights if self.args.weights is not None else "mobile_sam.pt"
+            print(f'Loading MobileSAM model {weights}')
+            sam_checkpoint = self.model_dir.joinpath(weights)
             predictor = sam_model_registry['vit_t'](checkpoint=sam_checkpoint).to(self.device).eval()
             self.model = SamPredictor(predictor)
         elif self.args.model == 'FastSAM':
@@ -78,6 +80,7 @@ class SinglePointInferenceEngine:
             self.model.to(self.device)
         else:
             raise NotImplementedError
+
 
     def get_output(self, img, prompt):
         if self.args.model == 'SAM':
@@ -112,6 +115,7 @@ class SinglePointInferenceEngine:
             raise NotImplementedError
         return mask, score
         
+
     def get_prompt(self, name, label):
         # Use precomputed prompts if available
         if self.prompts is not None:
@@ -135,6 +139,7 @@ class SinglePointInferenceEngine:
 
         return [[[y,x]]], c # inverted to compensate different indexing
 
+
     def get_pred_classes(self, inst, label):
         im = np.logical_not(inst).astype(np.uint8)
         im[im==1] = self.n_classes
@@ -144,6 +149,7 @@ class SinglePointInferenceEngine:
         mask_tot = np.sum(clean_h)
         classes = np.where(clean_h > self.args.class_thr * mask_tot)[0]
         return list(classes)
+
 
     def get_masks(self):
         name_list, mask_list, score_list, prompt_list = [], [], [], []
@@ -196,6 +202,7 @@ def main():
     parser.add_argument('--cuda', type=int, default=0)
 
     parser.add_argument('--model', type=str, default='SAM', choices=['SAM', 'MobileSAM', 'FastSAM'])
+    parser.add_argument('--weights', type=str, default=None)
     parser.add_argument('--sparsity', type=int, default=0)
     parser.add_argument('--pruning_method', type=str, default='l1norm', choices=['l1norm', 'sparsegpt'])
 
@@ -237,6 +244,8 @@ def main():
 
         del df, spie
         gc.collect()
+
+
 
 if __name__ == '__main__':
     main()
