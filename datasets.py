@@ -435,9 +435,11 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
         class_to_idx (dict): Dict with items (class_name, class_index).
         imgs (list): List of (image path, class_index) tuples
     """
-    def __init__(self, root, features=None):
+    def __init__(self, root, split=None, labels=False, features=None):
         super().__init__(root=root)
         self.features = torch.load(features) if features is not None else None
+        self.imgs = [s for s in self.imgs if split in s[0]] if split is not None else self.imgs
+        self.labels = labels
 
     CAT_LIST = []
     NUM_CLASS = 0
@@ -456,7 +458,8 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
         if self.transform is not None:
             sample = self.transform(sample)
 
-        if self.features is None:
+        target, features = None, None
+        if self.labels:
             masks = json.load(open(f'{path[:-3]}json'))['annotations'] # load json masks
             target = []
             for i, m in enumerate(masks, 1):
@@ -466,10 +469,10 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
             target = np.sum(target, axis=0, dtype=np.uint8)
             if self.target_transform is not None:
                 target = self.target_transform(target)
-        else:
-            target = self.features[index]
+        if self.features is not None:
+            features = self.features[index]
 
-        return np.array(sample), target, path.split('/')[-1][:-4]
+        return np.array(sample), target, path.split('/')[-1][:-4], features
 
     def __len__(self):
         return len(self.imgs)

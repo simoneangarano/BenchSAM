@@ -160,13 +160,13 @@ class SamPredictor:
             multimask_output,
             return_logits=return_logits,
         )
-
-        masks_np = masks[0].detach().cpu().numpy()
-        iou_predictions_np = iou_predictions[0].detach().cpu().numpy()
-        low_res_masks_np = low_res_masks[0].detach().cpu().numpy()
+  
+        masks_np =  masks[0] if return_logits else masks[0].detach().cpu().numpy()
+        iou_predictions_np = iou_predictions[0] if return_logits else iou_predictions[0].detach().cpu().numpy()
+        low_res_masks_np = low_res_masks[0] if return_logits else low_res_masks[0].detach().cpu().numpy()
         return masks_np, iou_predictions_np, low_res_masks_np
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def predict_torch(
         self,
         point_coords: Optional[torch.Tensor],
