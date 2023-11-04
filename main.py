@@ -8,11 +8,11 @@ import pandas as pd
 import cv2
 
 import torch
-from datasets import SA1B_Dataset, CitySegmentation, COCOSegmentation
+from utils.datasets import SA1B_Dataset, CitySegmentation, COCOSegmentation
 from fastsam import FastSAM, FastSAMPrompt
 from transformers import SamModel, SamProcessor
 from mobile_sam import sam_model_registry, SamPredictor
-from utils import get_mask_limits
+from utils.utils import get_mask_limits
 
 warnings.simplefilter('ignore', FutureWarning)
 gc.collect()
@@ -220,6 +220,7 @@ def main():
     parser.add_argument('--crop_mask', type=bool, default=False) # if True, the mask is cropped to the instance limits
     parser.add_argument('--save_results', type=bool, default=True)
     parser.add_argument('--experiment', type=str, default='')
+    parser.add_argument('--suffix', type=str, default='')
 
     args = parser.parse_args()
     print('\n'.join(f'{k}={v}' for k, v in vars(args).items()))
@@ -238,7 +239,7 @@ def main():
         df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class': s_class, 
                            'mask': mask, 'mask_origin': origin, 'score': score})
         p = '_gup' if args.pruning_method == 'l1norm' else ''
-        out_file = spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}_{args.sparsity}{p}.pkl')
+        out_file = spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}{args.suffix}_{args.sparsity}{p}.pkl')
         df.to_pickle(out_file)
         print(f'Results saved! {out_file}')
 

@@ -8,11 +8,13 @@ import random
 import torch
 from transformers import (SamModel, SamProcessor)
 from mobile_sam import sam_model_registry
-from predictor import SamPredictor
 
-from datasets import SA1B_Dataset
-from utils import *
-from distill_utils import *
+import sys
+sys.path.append('..')
+from utils.predictor import SamPredictor
+from utils.datasets import SA1B_Dataset
+from utils.utils import *
+from utils.distill_utils import *
 
 
 
@@ -111,7 +113,7 @@ class DecDistiller():
 
                     
             self.scheduler.step()
-            torch.save(self.student.model.state_dict(), f'bin/distilled_mobile_sam_{name}.pt')
+            torch.save(self.student.model.state_dict(), f'bin/distilled_mobile_sam_{name}_{e}.pt')
 
 
 
@@ -186,7 +188,7 @@ def main():
 
     DATA_DIR = Path('../Datasets/')
     SPLIT = 'sa_000020'
-    GPU = 2
+    GPU = 3
     DEVICE = torch.device(f"cuda:{GPU}" if torch.cuda.is_available() else "cpu")
 
     BATCH_SIZE = 8
@@ -195,13 +197,14 @@ def main():
     FEATURES = 'results/teacher_features.pt' if LOAD_FEATURES else None
 
     EPOCHS = 16
-    LR = 1e-4
-    OPTIM = 'adamw'
+    LR = 1e-6
+    OPTIM = 'adam'
     WD = 1e-5
-    LOSS_WEIGHTS = [0,1,0,0] # 20 focal, 1 dice, 0 bce, 0 size
+    LOSS_WEIGHTS = [1,1,0,0] # 20 focal, 1 dice, 0 bce, 0 size
 
     MODE = 'decoder' # encoder, decoder, save_features
     PRETRAINED = True if MODE == 'decoder' else False
+    EXP = 'fd'
 
     dataset = SA1B_Dataset(root=DATA_DIR.joinpath('SA_1B/images/'), split=SPLIT,  features=FEATURES, labels=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=SHUFFLE, num_workers=16, pin_memory=True)
@@ -241,7 +244,7 @@ def main():
     if MODE == 'save_features':
         distiller.save_teacher_features(Path('results/teacher_features.pt'))
     else:
-        distiller.distill(epochs=EPOCHS, accumulate=BATCH_SIZE, use_saved_features=LOAD_FEATURES, name=MODE)
+        distiller.distill(epochs=EPOCHS, accumulate=BATCH_SIZE, use_saved_features=LOAD_FEATURES, name=f'{MODE}_{EXP}')
 
 
 
