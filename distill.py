@@ -7,11 +7,11 @@ import random
 
 import torch
 from transformers import (SamModel, SamProcessor)
-from mobile_sam import sam_model_registry
+from utils.mobile_sam import sam_model_registry
 
 import sys
 sys.path.append('..')
-from utils.predictor import SamPredictor
+from utils.mobile_sam.predictor import SamPredictor
 from utils.datasets import SA1B_Dataset
 from utils.utils import *
 from utils.distill_utils import *
@@ -76,14 +76,16 @@ class DecDistiller():
         # Student
         img = img[0]
         self.student.set_image(img)
-        masks, scores, _ = self.student.predict(np.array(prompt[0]), np.array([1]), return_logits=True)
+        masks, scores, _ = self.student.predict(np.array(prompt[0]), np.array([1]), size=t_mask.mean(), return_logits=True)
         s_mask = masks.squeeze()[scores.argmax()]
         return t_mask, s_mask
 
 
     def distill(self, epochs=8, accumulate=4, use_saved_features=False, name=''):
-        self.student.model.mask_decoder.train()
+        self.student.model.mask_decoder.eval()
+        self.student.model.prompt_encoder.train()
         self.student.model.image_encoder.eval()
+
         for e in range(epochs):
             print(f'Epoch {e+1}/{epochs}')
             t = tqdm(self.dataloader)
@@ -197,16 +199,18 @@ def main():
     FEATURES = 'results/teacher_features.pt' if LOAD_FEATURES else None
 
     EPOCHS = 16
-    LR = 1e-6
+    LR = 1e-3
     OPTIM = 'adam'
     WD = 1e-5
-    LOSS_WEIGHTS = [1,1,0,0] # 20 focal, 1 dice, 0 bce, 0 size
+    LOSS_WEIGHTS = [1,3,0,0] # 20 focal, 1 dice, 0 bce, 0 size
+    SIZE_EMBEDDING = 'dense'
 
     MODE = 'decoder' # encoder, decoder, save_features
     PRETRAINED = True if MODE == 'decoder' else False
-    EXP = 'fd'
+    EXP = 'fd_l'
 
-    dataset = SA1B_Dataset(root=DATA_DIR.joinpath('SA_1B/images/'), split=SPLIT,  features=FEATURES, labels=True)
+    dataset = SA1B_Dataset(root=DATA_DIR.joinpath('SA_1B/images/'), split=["sa_00000" + str(i) for i in range(5)],
+                           features=None, labels=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=SHUFFLE, num_workers=16, pin_memory=True)
 
     teacher = SamModel.from_pretrained("facebook/sam-vit-huge").to(DEVICE)
@@ -216,7 +220,7 @@ def main():
     model_type = "vit_t"
     sam_checkpoint = "bin/mobile_sam.pt" if PRETRAINED else None
 
-    model = sam_model_registry[model_type](checkpoint=sam_checkpoint).to(DEVICE)
+    model = sam_model_registry[model_type](checkpoint=sam_checkpoint, size_embedding=SIZE_EMBEDDING).to(DEVICE)
     model.eval()
     for m in model.image_encoder.modules():
         if isinstance(m, torch.nn.BatchNorm2d):

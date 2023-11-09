@@ -3,6 +3,7 @@ import os, random, json
 import numpy as np
 import torch, torchvision
 
+import cv2
 from PIL import Image, ImageOps, ImageFilter
 
 from tqdm import trange
@@ -414,7 +415,7 @@ class COCOSegmentation(SegmentationDataset):
     
 
 
-class SA1B_Dataset(torchvision.datasets.ImageFolder):
+class SA1B_Dataset(torch.utils.data.Dataset):
     """A data loader for the SA-1B Dataset from "Segment Anything" (SAM)
 
     This class inherits from :class:`~torchvision.datasets.ImageFolder` so
@@ -436,10 +437,16 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
         imgs (list): List of (image path, class_index) tuples
     """
     def __init__(self, root, split=None, labels=False, features=None):
-        super().__init__(root=root)
+        super().__init__()
         self.features = torch.load(features) if features is not None else None
-        self.imgs = [s for s in self.imgs if split in s[0]] if split is not None else self.imgs
+        self.imgs = []
+        for _, img_dir in enumerate(split):
+            img_names = os.listdir(os.path.join(root, img_dir))
+            self.imgs += [os.path.join(root, img_dir, img_name) for img_name in img_names if ".jpg" in img_name]
+        # self.imgs = [s for s in self.imgs if split in s[0]] if split is not None else self.imgs
         self.labels = labels
+        self.transform = None
+        self.target_transform = None
 
     CAT_LIST = []
     NUM_CLASS = 0
@@ -452,8 +459,9 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
         Returns:
             tuple: (sample, target) where target is class_index of the target class.
         """
-        path, _ = self.imgs[index] # discard automatic subfolder labels
-        sample = self.loader(path)
+        path = self.imgs[index] # discard automatic subfolder labels
+        sample = cv2.imread(path)
+        sample = cv2.cvtColor(sample, cv2.COLOR_BGR2RGB)
 
         if self.transform is not None:
             sample = self.transform(sample)
@@ -469,9 +477,8 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
             target = np.sum(target, axis=0, dtype=np.uint8)
             if self.target_transform is not None:
                 target = self.target_transform(target)
-        if self.features is not None:
-            features = self.features[index]
-
+        features = np.load(self.imgs[index].replace(".jpg", ".npy")).squeeze()
+            # features = self.features[index]
         return np.array(sample), target, path.split('/')[-1][:-4], features
 
     def __len__(self):
@@ -483,6 +490,36 @@ class SA1B_Dataset(torchvision.datasets.ImageFolder):
     @property
     def num_class(self):
         return self.NUM_CLASS
+
+
+
+class sa1b_dataset(torch.utils.data.Dataset):
+    def __init__(self, root_path, img_dirs, transformer, max_num = None):
+        self.root_path = root_path
+        self.img_dirs = img_dirs
+        self.transformer = transformer
+        self.max_num = max_num
+        self.img_paths = []
+        for _, img_dir in enumerate(img_dirs):
+            img_names = os.listdir(os.path.join(root_path, img_dir))
+            self.img_paths += [os.path.join(root_path, img_dir, img_name) for img_name in img_names if ".jpg" in img_name]
+    
+    def __len__(self):
+        if not self.max_num:
+            return len(self.img_paths)
+        return min(self.max_num, len(self.img_paths))
+
+    def __getitem__(self, index):
+        img = cv2.imread(self.img_paths[index])
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        if self.transformer:
+            img = self.transformer(img)
+
+        feat = np.load(self.img_paths[index].replace(".jpg", ".npy")).squeeze()
+
+        return img, feat, self.img_paths[index].replace(".jpg", ".json")
+    
 
 
 def main():

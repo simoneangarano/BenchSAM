@@ -7,11 +7,12 @@
 import numpy as np
 import torch
 
-from mobile_sam.modeling import Sam
+from utils.mobile_sam.modeling import Sam
 
 from typing import Optional, Tuple
 
-from utils import ResizeLongestSide
+from .utils.transforms import ResizeLongestSide
+
 
 
 class SamPredictor:
@@ -97,6 +98,7 @@ class SamPredictor:
         box: Optional[np.ndarray] = None,
         mask_input: Optional[np.ndarray] = None,
         multimask_output: bool = True,
+        size: Optional[float] = None,
         return_logits: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -158,6 +160,7 @@ class SamPredictor:
             box_torch,
             mask_input_torch,
             multimask_output,
+            size=size,
             return_logits=return_logits,
         )
   
@@ -174,6 +177,7 @@ class SamPredictor:
         boxes: Optional[torch.Tensor] = None,
         mask_input: Optional[torch.Tensor] = None,
         multimask_output: bool = True,
+        size = None,
         return_logits: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -224,6 +228,7 @@ class SamPredictor:
             points=points,
             boxes=boxes,
             masks=mask_input,
+            size=size
         )
 
         # Predict masks
