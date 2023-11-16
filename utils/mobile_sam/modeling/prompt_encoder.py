@@ -167,7 +167,7 @@ class PromptEncoder(nn.Module):
             box_embeddings = self._embed_boxes(boxes)
             sparse_embeddings = torch.cat([sparse_embeddings, box_embeddings], dim=1)
         if self.size_embedding == 'sparse':
-            size_embedding = self._embed_size(size)
+            size_embedding = self._embed_size(size).unsqueeze(1)
             sparse_embeddings = torch.cat([sparse_embeddings, size_embedding], dim=1)
 
         if masks is not None:

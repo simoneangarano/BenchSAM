@@ -65,7 +65,7 @@ def get_metrics(target, pred, eps=1e-5, verbose=False):
 
     return iou, pixel_acc, dice, precision, specificity, recall
 
-def get_analytics(target_df, pred_df, prompt_df, cfg):
+def get_analytics(target_df, pred_df, prompt_df, cfg, skip_empty=False):
     metrics = {k: [] for k in ['name', 'prompt', 'class', 't_class', 's_class', 'score', 'score_diff', 'mask_size', 
                                'mask_size_diff', 'iou', 'pixel_acc', 'dice', 'precision', 'recall', 'specificity']}
     for i in range(len(target_df)):
@@ -73,6 +73,8 @@ def get_analytics(target_df, pred_df, prompt_df, cfg):
         pred = pred_df.loc[i]
         prompt = prompt_df.loc[i]
 
+        if skip_empty and not prompt['mask'].any():
+            continue
         if cfg['DATASET'] == 'sa1b':
             t = get_full_mask(target['mask'], target['mask_origin'], prompt['shape'])
             p = get_full_mask(pred['mask'], pred['mask_origin'], prompt['shape'])
@@ -104,16 +106,16 @@ def get_analytics(target_df, pred_df, prompt_df, cfg):
     return pd.DataFrame(metrics)
 
 def save_analytics(cfg):
-    df_p = pd.read_pickle(f"results/{cfg['EXPERIMENT']}{cfg['DATASET']}_prompts.pkl")
-    df_0 = pd.read_pickle(f"results/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['TARGET']}_0.pkl")
-    df_s = pd.read_pickle(f"results/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
+    df_p = pd.read_pickle(f"../results/{cfg['EXPERIMENT']}{cfg['DATASET']}_prompts.pkl")
+    df_0 = pd.read_pickle(f"../results/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['TARGET']}_0.pkl")
+    df_s = pd.read_pickle(f"../results/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
 
     df_0s = get_analytics(df_0, df_s, df_p, cfg)
-    df_0s.to_pickle(f"analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
+    df_0s.to_pickle(f"../results/analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
     df_0s.head()
 
 def get_summary(cfg, classwise=False):
-    df = pd.read_pickle(f"../analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
+    df = pd.read_pickle(f"../results/analytics/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}.pkl")
     df = add_superclass(df, cfg) if classwise else df
     classes = cfg['SUP_N'].values() if classwise else [-1]
     sums = []
@@ -386,13 +388,29 @@ def get_clusters(data, cfg, plot=False, save=False):
         plt.clf()
     return kmeans.labels_
 
+def show_anns(anns):
+    if len(anns) == 0:
+        return
+    sorted_anns = sorted(anns, key=(lambda x: x['area']), reverse=True)
+    ax = plt.gca()
+    ax.set_autoscale_on(False)
+
+    img = np.ones((sorted_anns[0]['segmentation'].shape[0], sorted_anns[0]['segmentation'].shape[1], 4))
+    img[:,:,3] = 0
+    for ann in sorted_anns:
+        m = ann['segmentation']
+        color_mask = np.concatenate([np.random.random(3), [0.35]])
+        img[m] = color_mask
+    ax.imshow(img)
+    return img
+
 
 
 ### Data Helpers ###
 
 def get_dataset_info(dataset):
     if dataset == 'coco':
-        root = Path("../Datasets/coco-2017/val2017/")
+        root = Path("../../Datasets/coco-2017/val2017/")
         n = 92
         classes = ['background', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
                    'street sign', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 
@@ -430,7 +448,7 @@ def get_dataset_info(dataset):
                           'indoor': 12}
         
     elif dataset == 'cityscapes':
-        root = Path("../Datasets/Cityscapes/leftImg8bit/val/")
+        root = Path("../../Datasets/Cityscapes/leftImg8bit/val/")
         n = 19
         classes = ['Road', 'Sidewalk', 'Building', 'Wall', 'Fence', 'Pole', 'Traffic Light', 'Traffic Sign', 'Vegetation', 
                    'Terrain', 'Sky', 'Person', 'Rider', 'Car', 'Truck', 'Bus', 'Train', 'Motorcycle', 'Bicycle']
@@ -438,7 +456,7 @@ def get_dataset_info(dataset):
         superclasses_n = {c: i for i, c in enumerate(classes)}
 
     elif dataset == 'sa1b':
-        root = Path("../Datasets/SA_1B/images/")
+        root = Path("../../Datasets/SA_1B/images/")
         n = 0
         classes = []
         superclasses = []
@@ -513,7 +531,7 @@ def get_image(name, cfg):
     elif cfg['DATASET'] == 'cityscapes':
         image_path = cfg['ROOT'].joinpath(f"{name.split('_')[0]}/{name}")
     elif cfg['DATASET'] == 'sa1b':
-        image_path = cfg['ROOT'].joinpath(f"0/{name}.jpg")
+        image_path = cfg['ROOT'].joinpath(f"sa_000020/{name}.jpg")
     return np.array(Image.open(image_path).convert("RGB"))
 
 def get_mask_limits(masks):
@@ -534,6 +552,7 @@ def get_mask_limits(masks):
   return np.min(bb[:,:2], axis=0).tolist(), np.max(bb[:,2:], axis=0).tolist(), mask
 
 def check_prompt(sample):
+    # If the prompt is not in the mask, it is to be considered (no prompt predicted)
     prompt = sample['prompt']
     mask = sample['mask']
     # If the mask is empty, it is to be considered (no mask predicted)

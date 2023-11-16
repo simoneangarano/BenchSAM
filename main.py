@@ -9,13 +9,57 @@ import cv2
 
 import torch
 from utils.datasets import SA1B_Dataset, CitySegmentation, COCOSegmentation
-from fastsam import FastSAM, FastSAMPrompt
+from utils.fastsam import FastSAM, FastSAMPrompt
 from transformers import SamModel, SamProcessor
-from mobile_sam import sam_model_registry, SamPredictor
+from utils.mobile_sam import sam_model_registry, SamPredictor
 from utils.utils import get_mask_limits
 
 warnings.simplefilter('ignore', FutureWarning)
 gc.collect()
+
+
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_dir', type=str, default='../Datasets/')
+    parser.add_argument('--model_dir', type=str, default='bin/')
+    parser.add_argument('--output_dir', type=str, default='results/')
+
+    parser.add_argument('--dataset', type=str, default='coco', choices=['coco', 'cityscapes', 'sa1b'])
+    parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
+    parser.add_argument('--crop_size', type=int, default=0)
+    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--num_workers', type=int, default=8)
+    parser.add_argument('--pin_memory', type=bool, default=False)
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--cuda', type=int, default=0)
+
+    parser.add_argument('--model', type=str, default='MobileSAM', choices=['SAM', 'MobileSAM', 'FastSAM'])
+    parser.add_argument('--weights', type=str, default=None)
+    parser.add_argument('--sparsity', type=int, default=0)
+    parser.add_argument('--pruning_method', type=str, default='l1norm', choices=['l1norm', 'sparsegpt'])
+
+    # Deprecated
+    # parser.add_argument('--imsize', type=int, default=1024)
+    # parser.add_argument('--retina', type=bool, default=True)
+    # parser.add_argument('--conf_thr', type=float, default=0.25)
+    # parser.add_argument('--iou_thr', type=float, default=0.0)
+    # parser.add_argument('--center_prompt', type=bool, default=False) # if True, the prompt is the centroid of the instance mask
+
+    parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
+    parser.add_argument('--edge_filter', type=bool, default=False) # removes edges from the instance mask before computing the prompt
+    parser.add_argument('--edge_width', type=int, default=5) # width of the border to remove
+    parser.add_argument('--refeed', type=bool, default=False) # if True, the mask is re-fed to the model to refine the prediction
+    parser.add_argument('--sigmoid', type=bool, default=False) # if True, the output is passed through a sigmoid function
+
+    parser.add_argument('--crop_mask', type=bool, default=False) # if True, the mask is cropped to the instance limits
+    parser.add_argument('--save_results', type=bool, default=True)
+    parser.add_argument('--experiment', type=str, default='')
+    parser.add_argument('--suffix', type=str, default='')
+
+    args = parser.parse_args()
+    # print('\n'.join(f'{k}={v}' for k, v in vars(args).items()))
+    return args
 
 
 
@@ -45,7 +89,8 @@ class SinglePointInferenceEngine:
         elif self.args.dataset == 'coco':
             dataset = COCOSegmentation(root=self.data_dir.joinpath('coco-2017/'), split=self.args.split, crop_size=self.args.crop_size)
         elif self.args.dataset == 'sa1b':
-            dataset = SA1B_Dataset(root=self.data_dir.joinpath('SA_1B/images/'))
+            dataset = SA1B_Dataset(root=self.data_dir.joinpath('SA_1B/images/'), split=["sa_000020"],
+                                   features=None, labels=True)
         else:
             raise NotImplementedError
 
@@ -98,8 +143,13 @@ class SinglePointInferenceEngine:
         elif self.args.model == 'MobileSAM':
             img = img[0].detach().cpu().numpy().astype(np.uint8)
             self.model.set_image(img)
-            masks, scores, _ = self.model.predict(np.array(prompt[0]), np.array([1]))
+            masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), return_logits=self.args.sigmoid)
+            if self.args.refeed:
+                lowres = lowres[scores.argmax()][None]
+                masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), mask_input=lowres, return_logits=self.args.sigmoid)
             mask = masks.squeeze()[scores.argmax()]
+            if self.args.sigmoid:
+                mask = torch.sigmoid(mask).detach().cpu().numpy() > 0.5
             score = float(scores.max())
         elif self.args.model == 'FastSAM':
             img = img[0].detach().cpu().numpy().astype(np.uint8)
@@ -156,8 +206,11 @@ class SinglePointInferenceEngine:
         p_class_list, s_class_list, origin_list, shape_list = [], [], [], []
 
         origin = [0,0]
-        for _, (i, l, n) in enumerate(tqdm(self.dataloader)):
-            
+        for _, sample in enumerate(tqdm(self.dataloader)):
+            if self.args.dataset == 'sa1b':
+                (i, l, n, _) = sample
+            else:
+                (i, l, n) = sample
             prompt, p_class = self.get_prompt(n[0], l[0])
             mask, score = self.get_output(i, prompt)
             if self.args.crop_mask:
@@ -187,44 +240,7 @@ class SinglePointInferenceEngine:
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='../Datasets/')
-    parser.add_argument('--model_dir', type=str, default='bin/')
-    parser.add_argument('--output_dir', type=str, default='results/')
-
-    parser.add_argument('--dataset', type=str, default='coco', choices=['coco', 'cityscapes', 'sa1b'])
-    parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
-    parser.add_argument('--crop_size', type=int, default=0)
-    parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_workers', type=int, default=8)
-    parser.add_argument('--pin_memory', type=bool, default=False)
-    parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--cuda', type=int, default=0)
-
-    parser.add_argument('--model', type=str, default='SAM', choices=['SAM', 'MobileSAM', 'FastSAM'])
-    parser.add_argument('--weights', type=str, default=None)
-    parser.add_argument('--sparsity', type=int, default=0)
-    parser.add_argument('--pruning_method', type=str, default='l1norm', choices=['l1norm', 'sparsegpt'])
-
-    # Deprecated
-    # parser.add_argument('--imsize', type=int, default=1024)
-    # parser.add_argument('--retina', type=bool, default=True)
-    # parser.add_argument('--conf_thr', type=float, default=0.25)
-    # parser.add_argument('--iou_thr', type=float, default=0.0)
-    # parser.add_argument('--center_prompt', type=bool, default=False) # if True, the prompt is the centroid of the instance mask
-
-    parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
-    parser.add_argument('--edge_filter', type=bool, default=False) # removes edges from the instance mask before computing the prompt
-    parser.add_argument('--edge_width', type=int, default=5) # width of the border to remove
-
-    parser.add_argument('--crop_mask', type=bool, default=False) # if True, the mask is cropped to the instance limits
-    parser.add_argument('--save_results', type=bool, default=True)
-    parser.add_argument('--experiment', type=str, default='')
-    parser.add_argument('--suffix', type=str, default='')
-
-    args = parser.parse_args()
-    print('\n'.join(f'{k}={v}' for k, v in vars(args).items()))
-
+    args = get_args()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)

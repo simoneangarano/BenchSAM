@@ -36,6 +36,7 @@ class SamAutomaticMaskGenerator:
     def __init__(
         self,
         model: Sam,
+        predictor: SamPredictor = None,
         points_per_side: Optional[int] = 32,
         points_per_batch: int = 64,
         pred_iou_thresh: float = 0.88,
@@ -120,7 +121,7 @@ class SamAutomaticMaskGenerator:
         if min_mask_region_area > 0:
             import cv2  # type: ignore # noqa: F401
 
-        self.predictor = SamPredictor(model)
+        self.predictor = SamPredictor(model) if predictor is None else predictor
         self.points_per_batch = points_per_batch
         self.pred_iou_thresh = pred_iou_thresh
         self.stability_score_thresh = stability_score_thresh
@@ -133,7 +134,7 @@ class SamAutomaticMaskGenerator:
         self.min_mask_region_area = min_mask_region_area
         self.output_mode = output_mode
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def generate(self, image: np.ndarray) -> List[Dict[str, Any]]:
         """
         Generates masks for the given image.

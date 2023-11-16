@@ -36,7 +36,7 @@ class Conv2d_BN(torch.nn.Sequential):
         torch.nn.init.constant_(bn.bias, 0)
         self.add_module('bn', bn)
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def fuse(self):
         c, bn = self._modules.values()
         w = bn.weight / (bn.running_var + bn.eps)**0.5
@@ -251,7 +251,7 @@ class Attention(torch.nn.Module):
                              torch.LongTensor(idxs).view(N, N),
                              persistent=False)
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def train(self, mode=True):
         super().train(mode)
         if mode and hasattr(self, 'ab'):

@@ -109,8 +109,6 @@ class SegmentationDataset(object):
     def pred_offset(self):
         return 0
 
-
-
 class CitySegmentation(SegmentationDataset):
     """Cityscapes Semantic Segmentation Dataset.
 
@@ -257,8 +255,6 @@ def _get_city_pairs(folder, split='train'):
         mask_paths = train_mask_paths + val_mask_paths
     return img_paths, mask_paths
 
-
-
 class COCOSegmentation(SegmentationDataset):
     """COCO Semantic Segmentation Dataset for VOC Pre-training.
 
@@ -296,12 +292,10 @@ class COCOSegmentation(SegmentationDataset):
         from pycocotools.coco import COCO
         from pycocotools import mask
         if split == 'train':
-            print('train set')
             ann_file = os.path.join(root, 'annotations/instances_train2017.json')
             ids_file = os.path.join(root, 'annotations/train_ids.mx')
             self.root = os.path.join(root, 'train2017')
         else:
-            print('val set')
             ann_file = os.path.join(root, 'annotations/instances_val2017.json')
             ids_file = os.path.join(root, 'annotations/val_ids.pkl')
             self.root = os.path.join(root, 'val2017')
@@ -310,7 +304,7 @@ class COCOSegmentation(SegmentationDataset):
         if os.path.exists(ids_file):
             with open(ids_file, 'rb') as f:
                 self.ids = pickle.load(f)
-            print(f'Loaded {len(self.ids)} samples from {ids_file}')
+            # print(f'Loaded {len(self.ids)} samples from {ids_file}')
         else:
             ids = list(self.coco.imgs.keys())
             self.ids = self._preprocess(ids, ids_file)
@@ -413,8 +407,6 @@ class COCOSegmentation(SegmentationDataset):
                 'appliance', 'appliance', 'appliance', 'appliance', 'appliance', 'appliance',
                 'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor', 'indoor')
     
-
-
 class SA1B_Dataset(torch.utils.data.Dataset):
     """A data loader for the SA-1B Dataset from "Segment Anything" (SAM)
 
@@ -436,7 +428,7 @@ class SA1B_Dataset(torch.utils.data.Dataset):
         class_to_idx (dict): Dict with items (class_name, class_index).
         imgs (list): List of (image path, class_index) tuples
     """
-    def __init__(self, root, split=None, labels=False, features=None):
+    def __init__(self, root, split=None, labels=False, features=None, max=None):
         super().__init__()
         self.features = torch.load(features) if features is not None else None
         self.imgs = []
@@ -444,6 +436,8 @@ class SA1B_Dataset(torch.utils.data.Dataset):
             img_names = os.listdir(os.path.join(root, img_dir))
             self.imgs += [os.path.join(root, img_dir, img_name) for img_name in img_names if ".jpg" in img_name]
         # self.imgs = [s for s in self.imgs if split in s[0]] if split is not None else self.imgs
+        if max is not None:
+            self.imgs = self.imgs[:max]
         self.labels = labels
         self.transform = None
         self.target_transform = None
