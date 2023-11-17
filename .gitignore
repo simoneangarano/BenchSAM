@@ -164,3 +164,5 @@ bin/
 analytics/
 .vscode/
 figures/
+*.png
+*.jpg
