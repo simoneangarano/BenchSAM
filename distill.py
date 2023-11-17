@@ -17,15 +17,16 @@ def main():
 
     DATA_DIR = Path('../Datasets/')
     SPLIT = 'sa_000020'
-    GPU = 4
+    GPU = 5
     DEVICE = torch.device(f"cuda:{GPU}" if torch.cuda.is_available() else "cpu")
 
     TRAIN_SPLITS = 1
     MAX_TEST = 2500
-    BATCH_SIZE = 16
+    BATCH_SIZE = 1
     NUM_WORKERS = 8
     SHUFFLE = True
     LOAD_FEATURES = True
+    N_PROMPTS = 5
     # FEATURES = 'results/teacher_features.pt' if LOAD_FEATURES else None
 
     EPOCHS = 20
@@ -82,7 +83,8 @@ def main():
     elif SCHEDULER == 'none':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=1.0)
 
-    distiller = DISTILLER(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, loss_weights=LOSS_WEIGHTS, 
+    distiller = DISTILLER(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, 
+                          loss_weights=LOSS_WEIGHTS, n_prompts=N_PROMPTS, 
                           profile=PROFILE, device=DEVICE)
 
     if MODE == 'save_features':

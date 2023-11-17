@@ -81,7 +81,7 @@ class EncDistiller(Distiller):
 
 class DecDistiller(Distiller):
     def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, loss_weights=[0,0,0,0,1,0], 
-                 profile=False, device='cuda'):
+                 n_prompts=1, profile=False, device='cuda'):
         
         super().__init__(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device)
 
@@ -93,6 +93,7 @@ class DecDistiller(Distiller):
         self.bce_loss = BBCEWithLogitLoss().to(self.device)
         self.iou_loss = IoULoss().to(self.device)
         self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.KW = loss_weights
+        self.n_prompts = n_prompts
         self.pr = cProfile.Profile() if profile else None
 
     def get_loss(self, t_mask, s_mask, label):
@@ -117,13 +118,27 @@ class DecDistiller(Distiller):
         iou_gt = iou_metric(s_mask, label.int())
         return iou_gt, iou
 
+    def get_prompts(self, label):
+        h, w = label.shape
+        margin_h, margin_w = h // self.n_prompts, w // self.n_prompts
+        prompts = []
+        for point_h in range(self.n_prompts):
+            for point_w in range(self.n_prompts):
+                crop = label[point_h*margin_h : (point_h+1)*margin_h, point_w*margin_w : (point_w+1)*margin_w]
+                local_prompt, c = self.get_prompt(crop)
+                prompt = [[local_prompt[0][0][0] + point_w * margin_w, local_prompt[0][0][1] + point_h * margin_h]]
+                prompts.append(([prompt], c))
+        return prompts
+    
     def get_prompt(self, label, seed=None):
         if self.edge_filter:
             e = cv2.Canny(image=label.cpu().numpy().astype(np.uint8), threshold1=10, threshold2=50)
             e = cv2.dilate(e, np.ones((self.edge_width, self.edge_width), np.uint8), iterations = 1).astype(bool)
             label[e] = 0
 
-        C = np.unique(label.cpu())[1:]
+        C = np.unique(label.cpu())
+        C = C[1:] if C[0] == 0 else C
+
         if len(C) == 0:
             c = 0
         else:
@@ -133,10 +148,14 @@ class DecDistiller(Distiller):
         x_v, y_v = np.where(label.cpu() == c)
         if seed is not None:
             random.seed(seed)
-        r = random.randint(0, len(x_v) - 1, )
+        r = random.randint(0, len(x_v) - 1)
         x, y = x_v[r], y_v[r]
 
         return [[[y,x]]], c # inverted to compensate different indexing
+
+    def get_features(self, img):
+        # Student
+        self.student.set_image(img[0].to(self.device))
 
     def get_masks(self, img, prompt, t_features):
         # Teacher
@@ -145,13 +164,13 @@ class DecDistiller(Distiller):
         inputs.update({"image_embeddings": t_features})
         with torch.no_grad():
             outputs = self.teacher(**inputs)
+        # Mask
         masks = self.processor.image_processor.post_process_masks(
             outputs.pred_masks, inputs["original_sizes"], 
             inputs["reshaped_input_sizes"], binarize=False)[0]
         scores = outputs.iou_scores
         t_mask = masks.squeeze()[scores.argmax()]
         # Student
-        self.student.set_image(img[0].to(self.device))
         masks, scores, _ = self.student.predict(np.array(prompt[0]), np.array([1]), size=t_mask.mean(), return_logits=True)
         s_mask = masks.squeeze()[scores.argmax()]
         return t_mask, s_mask
@@ -170,15 +189,18 @@ class DecDistiller(Distiller):
             r_focal, r_iou_gt, r_bce, r_iou, r_loss, r_bce_gt = 0, 0, 0, 0, 0, 0
             for i, (img, label, _, feats) in enumerate(t):
                 feats = feats.to(self.device) if use_saved_features else None
-                prompt, c = self.get_prompt(label[0])
+                self.get_features(img)
+
+                prompts = self.get_prompts(label[0])
                 label = label.to(self.device)
 
-                t_mask, s_mask = self.get_masks(img, prompt, feats)
-                focal, bce_gt, bce, iou, iou_gt, size = self.get_loss(t_mask, s_mask, label[0]==c)
-                loss_kd = self.FW * focal + self.BW * bce + self.IW * iou
-                loss_gt = self.BW * bce_gt + self.IW * iou_gt
-                loss = (self.KW * loss_kd + loss_gt) * (1-size) / accumulate
-                loss.backward(retain_graph=True)
+                for prompt, c in prompts:
+                    t_mask, s_mask = self.get_masks(img, prompt, feats)
+                    focal, bce_gt, bce, iou, iou_gt, size = self.get_loss(t_mask, s_mask, label[0]==c)
+                    loss_kd = self.FW * focal + self.BW * bce + self.IW * iou
+                    loss_gt = self.BW * bce_gt + self.IW * iou_gt
+                    loss = (self.KW * loss_kd + loss_gt) * (1-size) / accumulate
+                    loss.backward(retain_graph=True)
 
                 r_loss += loss.item()
                 r_focal += focal.item()
