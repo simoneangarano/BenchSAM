@@ -10,8 +10,6 @@ def get_dims_with_exclusion(dim, exclude=None):
 
     return dims
 
-
-
 def get_bbox_from_mask(mask):
     rows = np.any(mask, axis=1)
     cols = np.any(mask, axis=0)
@@ -19,7 +17,6 @@ def get_bbox_from_mask(mask):
     cmin, cmax = np.where(cols)[0][[0, -1]]
 
     return rmin, rmax, cmin, cmax
-
 
 def expand_bbox(bbox, expand_ratio, min_crop_size=None):
     rmin, rmax, cmin, cmax = bbox
@@ -38,17 +35,14 @@ def expand_bbox(bbox, expand_ratio, min_crop_size=None):
 
     return rmin, rmax, cmin, cmax
 
-
 def clamp_bbox(bbox, rmin, rmax, cmin, cmax):
     return (max(rmin, bbox[0]), min(rmax, bbox[1]),
             max(cmin, bbox[2]), min(cmax, bbox[3]))
-
 
 def get_bbox_iou(b1, b2):
     h_iou = get_segments_iou(b1[:2], b2[:2])
     w_iou = get_segments_iou(b1[2:4], b2[2:4])
     return h_iou * w_iou
-
 
 def get_segments_iou(s1, s2):
     a, b = s1
@@ -56,7 +50,6 @@ def get_segments_iou(s1, s2):
     intersection = max(0, min(b, d) - max(a, c) + 1)
     union = max(1e-6, max(b, d) - min(a, c) + 1)
     return intersection / union
-
 
 def get_labels_with_sizes(x):
     obj_sizes = np.bincount(x.flatten())

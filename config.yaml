@@ -1,0 +1,26 @@
+DATA_DIR: '../Datasets/'
+SPLIT: 'sa_000020'
+GPU: 2
+
+TRAIN_SPLITS: 1
+MAX_TEST: 2500
+BATCH_SIZE: 1
+NUM_WORKERS: 8
+SHUFFLE: True
+LOAD_FEATURES: True
+N_PROMPTS: 1
+RANDOM_PROMPT: False
+EDGE_FILTER: False
+
+EPOCHS: 20
+LR: 3e-4
+OPTIM: 'adamw'
+SCHEDULER: 'cos'
+DECAY: 0.9
+WD: 1e-5
+LOSS_WEIGHTS: [0,0,1,1,0,0,0] # FW, DW, BW, IW, MW, SW, KW
+SIZE_EMBEDDING: 'sparse' # sparse, dense
+
+MODE: 'decoder' # encoder, decoder, save_features
+EXP: 'test_central'
+PROFILE: False

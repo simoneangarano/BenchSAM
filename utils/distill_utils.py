@@ -81,11 +81,11 @@ class EncDistiller(Distiller):
 
 class DecDistiller(Distiller):
     def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, loss_weights=[0,0,0,0,1,0], 
-                 n_prompts=1, profile=False, device='cuda'):
+                 n_prompts=1, random_prompt=True, edge_filter=True, profile=False, device='cuda'):
         
         super().__init__(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device)
 
-        self.edge_filter = False
+        self.edge_filter = edge_filter
         self.edge_width = 20
         self.mse_loss = torch.nn.MSELoss(reduction='mean').to(self.device)
         self.focal_loss = NormalizedFocalLossSigmoid().to(self.device) # FocalLoss().to(self.device)
@@ -94,21 +94,119 @@ class DecDistiller(Distiller):
         self.iou_loss = IoULoss().to(self.device)
         self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.KW = loss_weights
         self.n_prompts = n_prompts
+        self.random_prompt = random_prompt
         self.pr = cProfile.Profile() if profile else None
 
+    def get_features(self, img):
+        self.student.set_image(img[0].to(self.device))
+
+    def get_masks(self, img, prompt, t_features):
+        # Teacher
+        inputs = self.processor(img, input_points=prompt, return_tensors="pt").to(self.device)
+        inputs.pop("pixel_values", None) # pixel_values are no more needed
+        inputs.update({"image_embeddings": t_features})
+        with torch.no_grad():
+            outputs = self.teacher(**inputs)
+        # Mask
+        masks = self.processor.image_processor.post_process_masks(
+            outputs.pred_masks, inputs["original_sizes"], 
+            inputs["reshaped_input_sizes"], binarize=False)[0]
+        scores = outputs.iou_scores
+        t_mask = masks.squeeze()[scores.argmax()]
+        # Student
+        masks, scores, _ = self.student.predict(np.array(prompt[0]), np.array([1]), size=(t_mask>0).float().mean(), return_logits=True)
+        s_mask = masks.squeeze()[scores.argmax()]
+        return t_mask, s_mask
+
+    def training_step(self, img, label, feats, acc, use_saved_features=False):
+        feats = feats.to(self.device) if use_saved_features else None
+        self.get_features(img)
+        prompts = self.get_prompts(label[0])
+        label = label.to(self.device)
+
+        for prompt, c in prompts:
+            t_mask, s_mask = self.get_masks(img, prompt, feats)
+            focal, bce_gt, bce, iou, iou_gt = self.get_loss(t_mask, s_mask, label[0]==c)
+            loss_kd = self.FW * focal + self.BW * bce + self.IW * iou
+            loss_gt = self.BW * bce_gt + self.IW * iou_gt
+            loss = (self.KW * loss_kd + loss_gt) / acc
+            loss.backward(retain_graph=True)
+        self.update_metrics(loss, focal, iou_gt, bce, iou, bce_gt)
+
+    def distill(self, epochs=8, acc=4, use_saved_features=False, name=''):
+        if self.pr:
+            self.pr.enable()
+        for e in range(epochs):
+            print(f'Epoch {e+1}/{epochs}')
+            self.student.model.mask_decoder.train()
+            self.student.model.prompt_encoder.train()
+            self.student.model.image_encoder.eval()
+
+            self.t = qqdm(self.dataloader, desc=format_str('bold', 'Distillation'))
+            self.init_metrics()
+            for i, (img, label, _, feats) in enumerate(self.t):
+                self.training_step(img, label, feats, acc, use_saved_features)
+                if (i+1) % acc == 0 or i+1 == len(self.dataloader):
+                    self.print_metrics(i, acc)
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+
+            torch.save(self.student.model.state_dict(), f'bin/distilled_mobile_sam_{name}_{e}.pt')
+            self.validate(use_saved_features=use_saved_features)
+            self.scheduler.step()
+
+            if self.pr:
+                self.pr.disable()
+                ps = pstats.Stats(self.pr, stream=io.StringIO()).sort_stats('time')
+                ps.dump_stats('results/profile.prof')
+                ps.print_stats(.1)
+
+    def validate(self, use_saved_features=False):
+        self.student.model.mask_decoder.eval()
+        self.student.model.prompt_encoder.eval()
+        self.student.model.image_encoder.eval()
+
+        with torch.no_grad():
+            t = qqdm(self.test_dataloader, desc=format_str('bold', 'Validation'))
+            r_bce, r_iou, r_loss, r_iou_m, r_iou_gt_m, r_iou_gt, r_bce_gt = 0, 0, 0, 0, 0, 0, 0
+            for i, (img, label, _, feats) in enumerate(t):
+                feats = feats.to(self.device) if use_saved_features else None
+                self.get_features(img)
+                prompt, c = self.get_prompt(label[0], seed=0)
+                label = label.to(self.device)
+
+                t_mask, s_mask = self.get_masks(img, prompt, feats)
+                
+                focal, bce_gt, bce, iou, iou_gt = self.get_loss(t_mask, s_mask, label[0]==c)
+                loss_kd = self.FW * focal + self.BW * bce + self.IW * iou
+                loss_gt = self.BW * bce_gt + self.IW * iou_gt
+                loss = (self.KW * loss_kd + loss_gt)
+
+                iou_gt_m, iou_m = self.get_metrics(t_mask, s_mask, label[0]==c)
+                r_loss += loss.item()
+                r_bce +=bce.item()
+                r_bce_gt += bce_gt.item()
+                r_iou_gt_m += iou_gt_m
+                r_iou += iou.item()
+                r_iou_gt += iou_gt.item()
+                r_iou_m += iou_m
+                t.set_infos({'Loss':f'{r_loss/(i+1):.2e}', 'BCE':f'{r_bce/(i+1):.3f}', 'BCEgt':f'{r_bce_gt/(i+1):.3f}', 
+                             'IoULoss':f'{r_iou/(i+1):.3f}', 'IoULossgt':f'{r_iou_gt/(i+1):.3f}', 
+                             'IoUkd':f'{r_iou_m/(i+1):.3f}', 'IoUgt':f'{r_iou_gt_m/(i+1):.3f}'})
+                
     def get_loss(self, t_mask, s_mask, label):
         t_mask_bin = (t_mask > 0.0)
         focal = self.focal_loss(s_mask, t_mask_bin.float())
         bce = self.bce_loss(s_mask, t_mask_bin.float())
         iou = self.iou_loss(s_mask, t_mask_bin.int())
-        size = t_mask_bin.float().mean() if self.SW > 0 else 0
+        #size = t_mask_bin.float().mean() if self.SW > 0 else 0
         #dice = self.dice_loss(s_mask, t_mask_bin.int())
         #mse = self.mse_loss(torch.relu(s_mask), torch.relu(t_mask))
 
         bce_gt = self.bce_loss(s_mask, label.float())
         iou_gt = self.iou_loss(s_mask, label.int())
 
-        return focal, bce_gt, bce, iou, iou_gt, size
+        return focal, bce_gt, bce, iou, iou_gt
     
     def get_metrics(self, t_mask, s_mask, label):
         t_mask_bin = (t_mask > 0.0)
@@ -135,132 +233,44 @@ class DecDistiller(Distiller):
             e = cv2.Canny(image=label.cpu().numpy().astype(np.uint8), threshold1=10, threshold2=50)
             e = cv2.dilate(e, np.ones((self.edge_width, self.edge_width), np.uint8), iterations = 1).astype(bool)
             label[e] = 0
-
         C = np.unique(label.cpu())
         C = C[1:] if C[0] == 0 else C
-
         if len(C) == 0:
             c = 0
         else:
             if seed is not None:
                 np.random.seed(seed)
             c = np.random.choice(C)
+
         x_v, y_v = np.where(label.cpu() == c)
-        if seed is not None:
-            random.seed(seed)
-        r = random.randint(0, len(x_v) - 1)
-        x, y = x_v[r], y_v[r]
+        if self.random_prompt:
+            if seed is not None:
+                random.seed(seed)
+            r = random.randint(0, len(x_v) - 1)
+            x, y = x_v[r], y_v[r]
+        else: # central prompt
+            x, y = x_v.mean(), y_v.mean()
+            x, y = int(x), int(y)
 
         return [[[y,x]]], c # inverted to compensate different indexing
 
-    def get_features(self, img):
-        # Student
-        self.student.set_image(img[0].to(self.device))
+    def init_metrics(self):
+        self.r_focal, self.r_iou_gt, self.r_bce, self.r_iou, self.r_loss, self.r_bce_gt = 0, 0, 0, 0, 0, 0
 
-    def get_masks(self, img, prompt, t_features):
-        # Teacher
-        inputs = self.processor(img, input_points=prompt, return_tensors="pt").to(self.device)
-        inputs.pop("pixel_values", None) # pixel_values are no more needed
-        inputs.update({"image_embeddings": t_features})
-        with torch.no_grad():
-            outputs = self.teacher(**inputs)
-        # Mask
-        masks = self.processor.image_processor.post_process_masks(
-            outputs.pred_masks, inputs["original_sizes"], 
-            inputs["reshaped_input_sizes"], binarize=False)[0]
-        scores = outputs.iou_scores
-        t_mask = masks.squeeze()[scores.argmax()]
-        # Student
-        masks, scores, _ = self.student.predict(np.array(prompt[0]), np.array([1]), size=t_mask.mean(), return_logits=True)
-        s_mask = masks.squeeze()[scores.argmax()]
-        return t_mask, s_mask
+    def update_metrics(self, loss, focal, iou_gt, bce, iou, bce_gt):
+        self.r_loss += loss.item()
+        self.r_focal += focal.item()
+        self.r_iou_gt += iou_gt.item()
+        self.r_bce += bce.item()
+        self.r_iou += iou.item()
+        self.r_bce_gt += bce_gt.item()
 
-    def distill(self, epochs=8, accumulate=4, use_saved_features=False, name=''):
-
-        if self.pr:
-            self.pr.enable()
-        for e in range(epochs):
-            print(f'Epoch {e+1}/{epochs}')
-            self.student.model.mask_decoder.train()
-            self.student.model.prompt_encoder.train()
-            self.student.model.image_encoder.eval()
-
-            t = qqdm(self.dataloader, desc=format_str('bold', 'Distillation'))
-            r_focal, r_iou_gt, r_bce, r_iou, r_loss, r_bce_gt = 0, 0, 0, 0, 0, 0
-            for i, (img, label, _, feats) in enumerate(t):
-                feats = feats.to(self.device) if use_saved_features else None
-                self.get_features(img)
-
-                prompts = self.get_prompts(label[0])
-                label = label.to(self.device)
-
-                for prompt, c in prompts:
-                    t_mask, s_mask = self.get_masks(img, prompt, feats)
-                    focal, bce_gt, bce, iou, iou_gt, size = self.get_loss(t_mask, s_mask, label[0]==c)
-                    loss_kd = self.FW * focal + self.BW * bce + self.IW * iou
-                    loss_gt = self.BW * bce_gt + self.IW * iou_gt
-                    loss = (self.KW * loss_kd + loss_gt) * (1-size) / accumulate
-                    loss.backward(retain_graph=True)
-
-                r_loss += loss.item()
-                r_focal += focal.item()
-                r_iou_gt += iou_gt.item()
-                r_bce += bce.item()
-                r_iou += iou.item()
-                r_bce_gt += bce_gt.item()
-                
-                if (i+1) % accumulate == 0 or i+1 == len(self.dataloader):
-                    t.set_infos({'Loss':f'{r_loss:.3e}', 'Focal':f'{r_focal/accumulate:.3f}', 
-                                 'IoU':f'{r_iou/accumulate:.3f}', 'BCE':f'{r_bce/accumulate:.3f}', 
-                                 'IoU GT':f'{r_iou_gt/accumulate:.3f}', 'BCE GT':f'{r_bce_gt/accumulate:.3f}', 
-                                 'LR':f'{self.optimizer.param_groups[0]["lr"]:.0e}'}) 
-                    r_focal, r_iou_gt, r_bce, r_iou, r_loss, r_bce_gt = 0, 0, 0, 0, 0, 0
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
-
-            torch.save(self.student.model.state_dict(), f'bin/distilled_mobile_sam_{name}_{e}.pt')
-            self.validate(use_saved_features=use_saved_features)
-            self.scheduler.step()
-
-            if self.pr:
-                self.pr.disable()
-                s = io.StringIO()
-                ps = pstats.Stats(self.pr, stream=s).sort_stats('time')
-                ps.dump_stats('results/profile.prof')
-                ps.print_stats(.1)
-
-    def validate(self, use_saved_features=False):
-        self.student.model.mask_decoder.eval()
-        self.student.model.prompt_encoder.eval()
-        self.student.model.image_encoder.eval()
-
-        with torch.no_grad():
-            t = qqdm(self.test_dataloader, desc=format_str('bold', 'Validation'))
-            r_bce, r_iou, r_loss, r_iou_m, r_iou_gt_m, r_iou_gt, r_bce_gt = 0, 0, 0, 0, 0, 0, 0
-            for i, (img, label, _, feats) in enumerate(t):
-                feats = feats.to(self.device) if use_saved_features else None
-                prompt, c = self.get_prompt(label[0], seed=0)
-                label = label.to(self.device)
-
-                t_mask, s_mask = self.get_masks(img, prompt, feats)
-                
-                focal, bce_gt, bce, iou, iou_gt, size = self.get_loss(t_mask, s_mask, label[0]==c)
-                loss_kd = self.FW * focal + self.BW * bce + self.IW * iou
-                loss_gt = self.BW * bce_gt + self.IW * iou_gt
-                loss = (self.KW * loss_kd + loss_gt) * (1-size)
-
-                iou_gt_m, iou_m = self.get_metrics(t_mask, s_mask, label[0]==c)
-                r_loss += loss.item()
-                r_bce +=bce.item()
-                r_bce_gt += bce_gt.item()
-                r_iou_gt_m += iou_gt_m
-                r_iou += iou.item()
-                r_iou_gt += iou_gt.item()
-                r_iou_m += iou_m
-                t.set_infos({'Loss':f'{r_loss/(i+1):.3e}', 'BCE':f'{r_bce/(i+1):.3f}', 'BCE GT':f'{r_bce_gt/(i+1):.3f}', 
-                             'IoU Loss':f'{r_iou/(i+1):.3f}', 'IoU Loss GT':f'{r_iou_gt/(i+1):.3f}', 
-                             'IoU KD':f'{r_iou_m/(i+1):.3f}', 'IoU GT':f'{r_iou_gt_m/(i+1):.3f}'})
-
+    def print_metrics(self, i, acc):
+        self.t.set_infos({'Loss':f'{self.r_loss/(i+1):.2e}', 'Focal':f'{self.r_focal/acc/(i+1):.3f}', 
+                          'IoU':f'{self.r_iou/acc/(i+1):.3f}', 'BCE':f'{self.r_bce/acc/(i+1):.1e}', 
+                          'IoUgt':f'{self.r_iou_gt/acc/(i+1):.3f}', 'BCEgt':f'{self.r_bce_gt/acc/(i+1):.3f}', 
+                          'LR':f'{self.optimizer.param_groups[0]["lr"]:.0e}'}) 
+        
 
 
 # Loss Functions

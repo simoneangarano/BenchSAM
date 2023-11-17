@@ -44,9 +44,13 @@ class PromptEncoder(nn.Module):
         self.image_embedding_size = image_embedding_size
         self.size_embedding = size_embedding            
         self.pe_layer = PositionEmbeddingRandom(embed_dim // 2)
+        self.DELIMITERS = [5e-4, 8e-4, 1e-3, 2e-3, 3e-3, 5e-3, 9e-3, 2e-2, 9e-2]
+        self.CLASSES = list(range(len(self.DELIMITERS)+1))
 
-        self.num_point_embeddings: int = 5  # pos/neg point + 2 box corners + size
-        point_embeddings = [nn.Embedding(1, embed_dim) for i in range(self.num_point_embeddings)]
+        self.num_point_embeddings: int = 4 # pos/neg point + 2 box corners
+        point_embeddings = [nn.Embedding(1, embed_dim) for _ in range(self.num_point_embeddings)]
+        if self.size_embedding == 'sparse':
+            point_embeddings.append(nn.Embedding(len(self.DELIMITERS)+1, embed_dim))
         self.point_embeddings = nn.ModuleList(point_embeddings)
         self.not_a_point_embed = nn.Embedding(1, embed_dim)
 
@@ -72,6 +76,13 @@ class PromptEncoder(nn.Module):
             1x(embed_dim)x(embedding_h)x(embedding_w)
         """
         return self.pe_layer(self.image_embedding_size).unsqueeze(0)
+    
+    def size_to_label(self, size):
+        # return the label of the size based on the delimiters
+        for l, d in zip(self.CLASSES, self.DELIMITERS):
+            if size < d:
+                return l
+        return self.CLASSES[-1]
 
     def _embed_points(
         self,
@@ -104,7 +115,8 @@ class PromptEncoder(nn.Module):
     
     def _embed_size(self, size: torch.Tensor) -> torch.Tensor:
         """Embeds size prompts."""
-        size_embedding = self.point_embeddings[4].weight * size
+        size_class = torch.tensor(self.size_to_label(size), device=size.device).unsqueeze(0)
+        size_embedding = self.point_embeddings[4](size_class)
         return size_embedding
 
     def _embed_masks(self, masks: torch.Tensor) -> torch.Tensor:
@@ -167,7 +179,7 @@ class PromptEncoder(nn.Module):
             box_embeddings = self._embed_boxes(boxes)
             sparse_embeddings = torch.cat([sparse_embeddings, box_embeddings], dim=1)
         if self.size_embedding == 'sparse':
-            size_embedding = self._embed_size(size).unsqueeze(1)
+            size_embedding = self._embed_size(size).unsqueeze(0)
             sparse_embeddings = torch.cat([sparse_embeddings, size_embedding], dim=1)
 
         if masks is not None:
