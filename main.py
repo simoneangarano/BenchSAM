@@ -8,6 +8,7 @@ import pandas as pd
 import cv2
 
 import torch
+from pycocotools import mask as maskUtils
 from utils.datasets import SA1B_Dataset, CitySegmentation, COCOSegmentation
 from utils.fastsam import FastSAM, FastSAMPrompt
 from transformers import SamModel, SamProcessor
@@ -53,6 +54,7 @@ def get_args():
     parser.add_argument('--sigmoid', type=bool, default=False) # if True, the output is passed through a sigmoid function
 
     parser.add_argument('--crop_mask', type=bool, default=False) # if True, the mask is cropped to the instance limits
+    parser.add_argument('--rle_encoding', type=bool, default=False) # if True, the mask is encoded in RLE format
     parser.add_argument('--save_results', type=bool, default=True)
     parser.add_argument('--experiment', type=str, default='')
     parser.add_argument('--suffix', type=str, default='')
@@ -218,7 +220,6 @@ class SinglePointInferenceEngine:
 
             name_list.append(n[0])
             shape_list.append(i.shape[2:])
-            mask_list.append(mask)
             origin_list.append(origin[::-1])
             score_list.append(score)
             prompt_list.append(prompt[0][0])
@@ -228,6 +229,9 @@ class SinglePointInferenceEngine:
             else:
                 p_class_list.append(int(p_class))
                 s_class_list.append(list(self.get_pred_classes(mask, l)))
+            if self.args.rle_encoding:
+                mask = maskUtils.encode(np.asfortranarray(mask))
+            mask_list.append(mask)
 
         if self.prompts is None:
             self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list,

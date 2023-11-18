@@ -7,6 +7,7 @@ import pycocotools
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+import pycocotools.mask as maskUtils
 
 import torch
 from torch.nn import functional as F
@@ -75,12 +76,18 @@ def get_analytics(target_df, pred_df, prompt_df, cfg, skip_empty=False):
 
         if skip_empty and not prompt['mask'].any():
             continue
-        if cfg['DATASET'] == 'sa1b':
-            t = get_full_mask(target['mask'], target['mask_origin'], prompt['shape'])
+        if isinstance(pred['mask'],dict):
+            p = maskUtils.decode(pred['mask'])
+        elif cfg['DATASET'] == 'sa1b':
             p = get_full_mask(pred['mask'], pred['mask_origin'], prompt['shape'])
         else:
-            t = target['mask']
             p = pred['mask']
+        if isinstance(target['mask'],dict):
+            t = maskUtils.decode(target['mask'])
+        elif cfg['DATASET'] == 'sa1b':
+            t = get_full_mask(target['mask'], target['mask_origin'], prompt['shape'])
+        else:
+            t = target['mask']
 
         iou, pixel_acc, dice, precision, specificity, recall = get_metrics(t.astype(bool), p.astype(bool))
         

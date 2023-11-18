@@ -216,14 +216,14 @@ class DecDistiller(Distiller):
         iou_gt = iou_metric(s_mask, label.int())
         return iou_gt, iou
 
-    def get_prompts(self, label):
+    def get_prompts(self, label, seed=None):
         h, w = label.shape
         margin_h, margin_w = h // self.n_prompts, w // self.n_prompts
         prompts = []
         for point_h in range(self.n_prompts):
             for point_w in range(self.n_prompts):
                 crop = label[point_h*margin_h : (point_h+1)*margin_h, point_w*margin_w : (point_w+1)*margin_w]
-                local_prompt, c = self.get_prompt(crop)
+                local_prompt, c = self.get_prompt(crop, seed=seed)
                 prompt = [[local_prompt[0][0][0] + point_w * margin_w, local_prompt[0][0][1] + point_h * margin_h]]
                 prompts.append(([prompt], c))
         return prompts
