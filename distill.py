@@ -15,7 +15,6 @@ from utils.distill_utils import *
 
 
 def main():
-
     with open('config.yaml', 'r') as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
 
@@ -34,9 +33,8 @@ def main():
     teacher.eval()
     processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
 
-    model_type = "vit_t"
     sam_checkpoint = "bin/mobile_sam.pt" if cfg['PRETRAINED'] else None
-    model = sam_model_registry[model_type](checkpoint=sam_checkpoint, size_embedding=cfg['SIZE_EMBEDDING']).to(cfg['DEVICE'])
+    model = sam_model_registry["vit_t"](checkpoint=sam_checkpoint, size_embedding=cfg['SIZE_EMBEDDING']).to(cfg['DEVICE'])
     model.eval()
     for m in model.image_encoder.modules():
         if isinstance(m, torch.nn.BatchNorm2d):
