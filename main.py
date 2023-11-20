@@ -38,7 +38,7 @@ def get_args():
     parser.add_argument('--model', type=str, default='MobileSAM', choices=['SAM', 'MobileSAM', 'FastSAM'])
     parser.add_argument('--weights', type=str, default=None)
     parser.add_argument('--sparsity', type=int, default=0)
-    parser.add_argument('--pruning_method', type=str, default='l1norm', choices=['l1norm', 'sparsegpt'])
+    parser.add_argument('--pruning_method', type=str, default='none', choices=['l1norm', 'sparsegpt', 'none'])
 
     # Deprecated
     # parser.add_argument('--imsize', type=int, default=1024)
@@ -46,8 +46,10 @@ def get_args():
     # parser.add_argument('--conf_thr', type=float, default=0.25)
     # parser.add_argument('--iou_thr', type=float, default=0.0)
     # parser.add_argument('--center_prompt', type=bool, default=False) # if True, the prompt is the centroid of the instance mask
-
+    
+    parser.add_argument('--random_prompt', type=bool, default=False) # if True, the prompt is a random point of the instance mask
     parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
+    parser.add_argument('--size_thr', type=float, default=0.0001)
     parser.add_argument('--edge_filter', type=bool, default=False) # removes edges from the instance mask before computing the prompt
     parser.add_argument('--edge_width', type=int, default=5) # width of the border to remove
     parser.add_argument('--refeed', type=bool, default=False) # if True, the mask is re-fed to the model to refine the prediction
@@ -180,15 +182,22 @@ class SinglePointInferenceEngine:
             e = cv2.dilate(e, np.ones((self.args.edge_width, self.args.edge_width), np.uint8), iterations = 1).astype(bool)
             label[e] = 0
 
-        C = np.unique(label)[1:]
+        C, counts = np.unique(label.cpu(), return_counts=True)
+        counts = (counts / counts.sum())[1:]
+        C = C[1:][counts > self.args.size_thr]
         if len(C) == 0:
+            print(f'No classes found')
             c = 0
         else:
             c = np.random.choice(C)
-        x_v, y_v = np.where(label == c)
-        r = random.randint(0, len(x_v) - 1)
-        x, y = x_v[r], y_v[r]
 
+        x_v, y_v = np.where(label == c)
+        if self.args.random_prompt:
+            r = random.randint(0, len(x_v) - 1)
+            x, y = x_v[r], y_v[r]
+        else: # central prompt
+            x, y = x_v.mean(), y_v.mean()
+            x, y = int(x), int(y)
         return [[[y,x]]], c # inverted to compensate different indexing
 
 

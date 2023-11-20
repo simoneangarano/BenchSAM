@@ -7,13 +7,14 @@ import pandas as pd
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from utils import misc
 
 
 
 # Distillers
 class Distiller():
-    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device):
+    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device, debug=False):
         self.teacher = teacher
         self.student = student
         self.processor = processor
@@ -22,6 +23,7 @@ class Distiller():
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.device = device
+        self.debug = debug
     
     def save_teacher_features(self, path):
         ids, features = [], []
@@ -80,22 +82,26 @@ class EncDistiller(Distiller):
             torch.save(self.student.model.state_dict(), 'bin/distilled_mobile_sam.pt')
 
 class DecDistiller(Distiller):
-    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, loss_weights=[0,0,0,0,1,0], 
-                 n_prompts=1, random_prompt=True, edge_filter=True, profile=False, device='cuda'):
+    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, 
+                 loss_weights=[0,0,0,0,1,0], 
+                 n_prompts=1, random_prompt=True, edge_filter=True, size_thr=0, profile=False, device='cuda', debug=False):
         
-        super().__init__(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device)
+        super().__init__(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device, debug)
 
         self.edge_filter = edge_filter
         self.edge_width = 20
         self.mse_loss = torch.nn.MSELoss(reduction='mean').to(self.device)
-        self.focal_loss = NormalizedFocalLossSigmoid().to(self.device) # FocalLoss().to(self.device)
+        self.focal_loss = FocalLoss().to(self.device) # FocalLoss().to(self.device)
         self.dice_loss = DiceLoss().to(self.device)
         self.bce_loss = BBCEWithLogitLoss().to(self.device)
         self.iou_loss = IoULoss().to(self.device)
+        self.bound_loss = BoundaryLoss().to(self.device)
         self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.KW = loss_weights
         self.n_prompts = n_prompts
         self.random_prompt = random_prompt
+        self.size_thr = size_thr
         self.pr = cProfile.Profile() if profile else None
+        self.best_iou = 0
 
     def get_features(self, img):
         self.student.set_image(img[0].to(self.device))
@@ -118,7 +124,7 @@ class DecDistiller(Distiller):
         s_mask = masks.squeeze()[scores.argmax()]
         return t_mask, s_mask
 
-    def training_step(self, img, label, feats, acc, use_saved_features=False):
+    def step(self, img, label, feats, acc, use_saved_features=False):
         feats = feats.to(self.device) if use_saved_features else None
         self.get_features(img)
         prompts = self.get_prompts(label[0])
@@ -126,18 +132,22 @@ class DecDistiller(Distiller):
 
         for prompt, c in prompts:
             t_mask, s_mask = self.get_masks(img, prompt, feats)
-            focal, bce_gt, bce, iou, iou_gt = self.get_loss(t_mask, s_mask, label[0]==c)
-            loss_kd = self.FW * focal + self.BW * bce + self.IW * iou
-            loss_gt = self.BW * bce_gt + self.IW * iou_gt
-            loss = (self.KW * loss_kd + loss_gt) / acc
+            if self.debug:
+                t_mask_bin = (t_mask > 0.0)
+                s_mask_bin = (s_mask > 0.0)
+            focal, bce, iou, dice = self.get_loss(t_mask, s_mask, label[0]==c)
+            loss = (self.FW * focal + self.BW * bce + self.IW * iou + self.DW * dice)/(acc*len(prompts))
             loss.backward(retain_graph=True)
-        self.update_metrics(loss, focal, iou_gt, bce, iou, bce_gt)
+            if self.debug:
+                print(f"BCE: {bce.item():.2e} IoU: {iou.item():.2e} Focal: {focal.item():.2e} Dice: {dice.item():.2e}")
+            self.update_metrics(loss*acc, focal/len(prompts), bce/len(prompts), iou/len(prompts), dice/len(prompts))
 
     def distill(self, epochs=8, acc=4, use_saved_features=False, name=''):
+        self.acc = acc
         if self.pr:
             self.pr.enable()
         for e in range(epochs):
-            print(f'Epoch {e+1}/{epochs}')
+            print(f'Epoch {e+1}/{epochs} LR {self.optimizer.param_groups[0]["lr"]:.0e}')
             self.student.model.mask_decoder.train()
             self.student.model.prompt_encoder.train()
             self.student.model.image_encoder.eval()
@@ -145,14 +155,16 @@ class DecDistiller(Distiller):
             self.t = qqdm(self.dataloader, desc=format_str('bold', 'Distillation'))
             self.init_metrics()
             for i, (img, label, _, feats) in enumerate(self.t):
-                self.training_step(img, label, feats, acc, use_saved_features)
+                self.step(img, label, feats, acc, use_saved_features)
                 if (i+1) % acc == 0 or i+1 == len(self.dataloader):
                     self.print_metrics(i, acc)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
 
-            torch.save(self.student.model.state_dict(), f'bin/distilled_mobile_sam_{name}_{e}.pt')
-            self.validate(use_saved_features=use_saved_features)
+            miou = self.validate(use_saved_features=use_saved_features)
+            if miou > self.best_iou:
+                torch.save(self.student.model.state_dict(), f'bin/distilled_mobile_sam_{name}.pt')
+                self.best_iou = miou
             self.scheduler.step()
 
             if self.pr:
@@ -168,7 +180,7 @@ class DecDistiller(Distiller):
 
         with torch.no_grad():
             t = qqdm(self.test_dataloader, desc=format_str('bold', 'Validation'))
-            r_bce, r_iou, r_loss, r_iou_m, r_iou_gt_m, r_iou_gt, r_bce_gt = 0, 0, 0, 0, 0, 0, 0
+            r_bce, r_iou, r_loss, r_focal, r_dice = 0, 0, 0, 0, 0
             for i, (img, label, _, feats) in enumerate(t):
                 feats = feats.to(self.device) if use_saved_features else None
                 self.get_features(img)
@@ -176,45 +188,41 @@ class DecDistiller(Distiller):
                 label = label.to(self.device)
 
                 t_mask, s_mask = self.get_masks(img, prompt, feats)
-                
-                focal, bce_gt, bce, iou, iou_gt = self.get_loss(t_mask, s_mask, label[0]==c)
-                loss_kd = self.FW * focal + self.BW * bce + self.IW * iou
-                loss_gt = self.BW * bce_gt + self.IW * iou_gt
-                loss = (self.KW * loss_kd + loss_gt)
-
-                iou_gt_m, iou_m = self.get_metrics(t_mask, s_mask, label[0]==c)
+                if self.debug:
+                    t_mask_bin = (t_mask > 0.0)
+                    s_mask_bin = (s_mask > 0.0)
+                focal, bce, iou, dice = self.get_loss(t_mask, s_mask, label[0]==c)
+                loss = self.FW * focal + self.BW * bce + self.IW * iou + self.DW * dice
+                iou = self.get_metrics(t_mask, s_mask, label[0]==c)
+                if self.debug:
+                    print(f"BCE: {bce.item():.2e} Focal: {focal.item():.2e} Dice: {dice.item():.2e} mIoU: {iou:.2e}")
                 r_loss += loss.item()
-                r_bce +=bce.item()
-                r_bce_gt += bce_gt.item()
-                r_iou_gt_m += iou_gt_m
-                r_iou += iou.item()
-                r_iou_gt += iou_gt.item()
-                r_iou_m += iou_m
-                t.set_infos({'Loss':f'{r_loss/(i+1):.2e}', 'BCE':f'{r_bce/(i+1):.3f}', 'BCEgt':f'{r_bce_gt/(i+1):.3f}', 
-                             'IoULoss':f'{r_iou/(i+1):.3f}', 'IoULossgt':f'{r_iou_gt/(i+1):.3f}', 
-                             'IoUkd':f'{r_iou_m/(i+1):.3f}', 'IoUgt':f'{r_iou_gt_m/(i+1):.3f}'})
+                r_focal += focal.item()
+                r_bce += bce.item()
+                r_iou += iou
+                r_dice += dice.item()
+                t.set_infos({'Loss':f'{r_loss/(i+1):.2e}', 'Focal':f'{r_focal/(i+1):.3f}', 'BCE':f'{r_bce/(i+1):.3f}', 
+                             'Dice':f'{r_dice/(i+1):.3f}', 'mIoU':f'{r_iou/(i+1):.3f}', })
+            return r_iou / len(self.test_dataloader)
                 
     def get_loss(self, t_mask, s_mask, label):
         t_mask_bin = (t_mask > 0.0)
         focal = self.focal_loss(s_mask, t_mask_bin.float())
         bce = self.bce_loss(s_mask, t_mask_bin.float())
         iou = self.iou_loss(s_mask, t_mask_bin.int())
-        #size = t_mask_bin.float().mean() if self.SW > 0 else 0
-        #dice = self.dice_loss(s_mask, t_mask_bin.int())
-        #mse = self.mse_loss(torch.relu(s_mask), torch.relu(t_mask))
-
-        bce_gt = self.bce_loss(s_mask, label.float())
-        iou_gt = self.iou_loss(s_mask, label.int())
-
-        return focal, bce_gt, bce, iou, iou_gt
+        dice = self.dice_loss(s_mask, t_mask_bin.int())
+        #bce_gt = self.bce_loss(s_mask, label.float())
+        #iou_gt = self.iou_loss(s_mask, label.int())
+        #bound = self.bound_loss(s_mask, label.int())
+        return focal, bce, iou, dice
     
     def get_metrics(self, t_mask, s_mask, label):
         t_mask_bin = (t_mask > 0.0)
         # focal = focal_metric(s_mask, t_mask_bin.float())
         # bce = bce_metric(s_mask, t_mask_bin.float())
         iou = iou_metric(s_mask, t_mask_bin.int())
-        iou_gt = iou_metric(s_mask, label.int())
-        return iou_gt, iou
+        #iou_gt = iou_metric(s_mask, label.int())
+        return iou
 
     def get_prompts(self, label, seed=None):
         h, w = label.shape
@@ -233,14 +241,16 @@ class DecDistiller(Distiller):
             e = cv2.Canny(image=label.cpu().numpy().astype(np.uint8), threshold1=10, threshold2=50)
             e = cv2.dilate(e, np.ones((self.edge_width, self.edge_width), np.uint8), iterations = 1).astype(bool)
             label[e] = 0
-        C = np.unique(label.cpu())
-        C = C[1:] if C[0] == 0 else C
-        if len(C) == 0:
-            c = 0
-        else:
-            if seed is not None:
-                np.random.seed(seed)
-            c = np.random.choice(C)
+        C, counts = np.unique(label.cpu(), return_counts=True)
+        counts = (counts / counts.sum())[1:]
+        C = C[1:][counts > self.size_thr]
+        # C = C[1:] if C[0] == 0 else C
+        # if len(C) == 0:
+        #     c = 0
+        # else:
+        if seed is not None:
+            np.random.seed(seed)
+        c = np.random.choice(C)
 
         x_v, y_v = np.where(label.cpu() == c)
         if self.random_prompt:
@@ -255,21 +265,19 @@ class DecDistiller(Distiller):
         return [[[y,x]]], c # inverted to compensate different indexing
 
     def init_metrics(self):
-        self.r_focal, self.r_iou_gt, self.r_bce, self.r_iou, self.r_loss, self.r_bce_gt = 0, 0, 0, 0, 0, 0
+        self.r_focal, self.r_bce, self.r_iou, self.r_loss, self.r_dice = 0, 0, 0, 0, 0
 
-    def update_metrics(self, loss, focal, iou_gt, bce, iou, bce_gt):
+    def update_metrics(self, loss, focal, bce, iou, dice):
         self.r_loss += loss.item()
         self.r_focal += focal.item()
-        self.r_iou_gt += iou_gt.item()
+        self.r_dice += dice.item()
         self.r_bce += bce.item()
         self.r_iou += iou.item()
-        self.r_bce_gt += bce_gt.item()
 
     def print_metrics(self, i, acc):
-        self.t.set_infos({'Loss':f'{self.r_loss/(i+1):.2e}', 'Focal':f'{self.r_focal/acc/(i+1):.3f}', 
-                          'IoU':f'{self.r_iou/acc/(i+1):.3f}', 'BCE':f'{self.r_bce/acc/(i+1):.1e}', 
-                          'IoUgt':f'{self.r_iou_gt/acc/(i+1):.3f}', 'BCEgt':f'{self.r_bce_gt/acc/(i+1):.3f}', 
-                          'LR':f'{self.optimizer.param_groups[0]["lr"]:.0e}'}) 
+        self.t.set_infos({'Loss':f'{self.r_loss/(i+1):.2e}', 'Focal':f'{self.r_focal/(i+1):.2e}', 
+                          'BCE':f'{self.r_bce/(i+1):.1e}', 'Dice':f'{self.r_dice/(i+1):.3f}', 
+                          'IoU':f'{self.r_iou/(i+1):.3f}'}) 
         
 
 
@@ -366,35 +374,7 @@ class FocalLoss(torch.nn.Module):
         focal_loss = self.alpha * (1-BCE_EXP)**self.gamma * BCE
                        
         return focal_loss
-
-'''   Deprecated IoU Loss
-class IoULoss(torch.nn.Module):
-    def __init__(self):
-        super(IoULoss, self).__init__()
-
-    def forward(self, inputs, target):
-        # inputs => N x H x W (logits)
-        # target => N x H x W (one-hot)
-        N = inputs.size()[0]
-
-        inputs = torch.sigmoid(inputs)
-
-        # Numerator Product
-        inter = inputs * target
-        ## Sum over all pixels N x H x W => N x C
-        inter = inter.view(N, -1).sum(1)
-
-        #Denominator 
-        union = inputs + target - (inputs*target)
-        ## Sum over all pixels N x H x W => N x C
-        union = union.view(N, -1).sum(1)
-
-        loss = -torch.log((inter + 1) / (union + 1))
-
-        ## Return average loss over classes and batch
-        return loss.mean()
-'''
-    
+   
 class IoULoss(torch.nn.Module):
     def __init__(self):
         super(IoULoss, self).__init__()
@@ -429,7 +409,84 @@ class BBCEWithLogitLoss(torch.nn.Module):
 
         return loss
 
+class BoundaryLoss(torch.nn.Module):
+    """Boundary Loss proposed in:
+    Alexey Bokhovkin et al., Boundary Loss for Remote Sensing Imagery Semantic Segmentation
+    https://arxiv.org/abs/1905.07852
+    """
 
+    def __init__(self, theta0=3, theta=5):
+        super().__init__()
+
+        self.theta0 = theta0
+        self.theta = theta
+
+    def forward(self, pred, gt):
+        """
+        Input:
+            - pred: the output from model (before softmax)
+                    shape (N, C, H, W)
+            - gt: ground truth map
+                    shape (N, H, w)
+        Return:
+            - boundary loss, averaged over mini-bathc
+        """
+        pred = torch.sigmoid(pred[None, None, ...])
+        gt = gt[None, ...]
+        bg_pred = torch.ones_like(pred) - pred
+        fg_pred = pred.clone()
+        pred = torch.cat([bg_pred, fg_pred], dim=1)
+
+        n, c, _, _ = pred.shape
+
+        # softmax so that predicted map can be distributed in [0, 1]
+        pred = torch.softmax(pred, dim=1)
+
+        # one-hot vector of ground truth
+        one_hot_gt = one_hot(gt, c)
+        print(pred.shape, one_hot_gt.shape)
+        # boundary map
+        gt_b = F.max_pool2d(
+            1 - one_hot_gt, kernel_size=self.theta0, stride=1, padding=(self.theta0 - 1) // 2)
+        gt_b -= 1 - one_hot_gt
+
+        pred_b = F.max_pool2d(
+            1 - pred, kernel_size=self.theta0, stride=1, padding=(self.theta0 - 1) // 2)
+        pred_b -= 1 - pred
+
+        # extended boundary map
+        gt_b_ext = F.max_pool2d(
+            gt_b, kernel_size=self.theta, stride=1, padding=(self.theta - 1) // 2)
+
+        pred_b_ext = F.max_pool2d(
+            pred_b, kernel_size=self.theta, stride=1, padding=(self.theta - 1) // 2)
+
+        # reshape
+        gt_b = gt_b.view(n, c, -1)
+        pred_b = pred_b.view(n, c, -1)
+        gt_b_ext = gt_b_ext.view(n, c, -1)
+        pred_b_ext = pred_b_ext.view(n, c, -1)
+
+        # Precision, Recall
+        P = torch.sum(pred_b * gt_b_ext, dim=2) / (torch.sum(pred_b, dim=2) + 1e-7)
+        R = torch.sum(pred_b_ext * gt_b, dim=2) / (torch.sum(gt_b, dim=2) + 1e-7)
+
+        # Boundary F1 Score
+        BF1 = 2 * P * R / (P + R + 1e-7)
+
+        # summing BF1 Score for each class and average over mini-batch
+        loss = torch.mean(1 - BF1)
+
+        return loss
+
+def one_hot(label, n_classes, requires_grad=True):
+    """Return One Hot Label"""
+    device = label.device
+    one_hot_label = torch.eye(
+        n_classes, device=device, requires_grad=requires_grad)[label]
+    one_hot_label = one_hot_label.transpose(1, 3).transpose(2, 3)
+
+    return one_hot_label
 
 # Metrics
 def iou_metric(pred, target):

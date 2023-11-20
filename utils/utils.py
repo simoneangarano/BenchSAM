@@ -74,17 +74,14 @@ def get_analytics(target_df, pred_df, prompt_df, cfg, skip_empty=False):
         pred = pred_df.loc[i]
         prompt = prompt_df.loc[i]
 
-        if skip_empty and not prompt['mask'].any():
-            continue
-        if isinstance(pred['mask'],dict):
-            p = maskUtils.decode(pred['mask'])
-        elif cfg['DATASET'] == 'sa1b':
+        if 'mask' in prompt.keys(): 
+            if skip_empty and not prompt['mask'].any():
+                continue
+        if cfg['DATASET'] == 'sa1b':
             p = get_full_mask(pred['mask'], pred['mask_origin'], prompt['shape'])
         else:
             p = pred['mask']
-        if isinstance(target['mask'],dict):
-            t = maskUtils.decode(target['mask'])
-        elif cfg['DATASET'] == 'sa1b':
+        if cfg['DATASET'] == 'sa1b':
             t = get_full_mask(target['mask'], target['mask_origin'], prompt['shape'])
         else:
             t = target['mask']
@@ -98,9 +95,9 @@ def get_analytics(target_df, pred_df, prompt_df, cfg, skip_empty=False):
         metrics['s_class'].append(pred['s_class'])
         metrics['score'].append(pred['score'])
         metrics['score_diff'].append((pred['score'] - target['score']) / (target['score'] + 1e-5))
-        p_size = np.mean(pred['mask'].astype('float'))
+        p_size = np.mean(p.astype('float'))
     
-        t_size = np.mean(target['mask'].astype('float'))
+        t_size = np.mean(t.astype('float'))
         metrics['mask_size'].append(p_size)
         metrics['mask_size_diff'].append((p_size - t_size) / (t_size + 1e-3))
         metrics['iou'].append(iou)
@@ -165,7 +162,7 @@ def show_boxes_on_image(raw_image, boxes):
     plt.axis('on')
     plt.show()
 
-def show_points_on_image(raw_image, input_points, input_labels=None):
+def show_points_on_image(raw_image, input_points, input_labels=None, title=None, axis='off'):
     plt.figure(figsize=(6,6))
     plt.imshow(raw_image)
     input_points = np.array(input_points)
@@ -174,7 +171,8 @@ def show_points_on_image(raw_image, input_points, input_labels=None):
     else:
       labels = np.array(input_labels)
     show_points(input_points, labels, plt.gca())
-    plt.axis('on')
+    plt.axis(axis)
+    plt.title(title)
     plt.show()
 
 def show_points_and_boxes_on_image(raw_image, boxes, input_points, input_labels=None):
@@ -515,9 +513,12 @@ def add_superclass(df, cfg):
         df['superclass'] = df['class']
     return df
 
-def get_full_mask(mask, origin, full_shape):
-    full_mask = np.zeros(full_shape)
-    full_mask[origin[0]:origin[0]+mask.shape[0], origin[1]:origin[1]+mask.shape[1]] = mask
+def get_full_mask(mask, origin=None, full_shape=None):
+    if isinstance(mask, dict):
+        full_mask = maskUtils.decode(mask)
+    else:
+        full_mask = np.zeros(full_shape)
+        full_mask[origin[0]:origin[0]+mask.shape[0], origin[1]:origin[1]+mask.shape[1]] = mask
     return full_mask
 
 def add_image_shape(df, cfg):
@@ -557,6 +558,13 @@ def get_mask_limits(masks):
       mask = mask[bb[index, 1]:bb[index, 3], bb[index, 0]:bb[index, 2]]
 
   return np.min(bb[:,:2], axis=0).tolist(), np.max(bb[:,2:], axis=0).tolist(), mask
+
+def get_mask_size(s, df=None):
+    if df is not None:
+        imsize = df[df['name']==s['name']]['shape'].values[0]
+    else:
+        imsize = s['shape']
+    return np.sum(s['mask']) / (imsize[0] * imsize[1])
 
 def check_prompt(sample):
     # If the prompt is not in the mask, it is to be considered (no prompt predicted)

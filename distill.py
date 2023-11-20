@@ -1,5 +1,6 @@
 from pathlib import Path
 import yaml
+import json
 
 import torch
 from transformers import (SamModel, SamProcessor)
@@ -17,7 +18,7 @@ from utils.distill_utils import *
 def main():
     with open('config.yaml', 'r') as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
-
+    json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'))
     cfg['DATA_DIR'] = Path(cfg['DATA_DIR'])
     cfg['DEVICE'] = torch.device(f"cuda:{cfg['GPU']}" if torch.cuda.is_available() else "cpu")
     cfg['PRETRAINED'] = True if cfg['MODE'] == 'decoder' else False
@@ -33,7 +34,7 @@ def main():
     teacher.eval()
     processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
 
-    sam_checkpoint = "bin/mobile_sam.pt" if cfg['PRETRAINED'] else None
+    sam_checkpoint = cfg['CKPT'] if cfg['PRETRAINED'] else None
     model = sam_model_registry["vit_t"](checkpoint=sam_checkpoint, size_embedding=cfg['SIZE_EMBEDDING']).to(cfg['DEVICE'])
     model.eval()
     for m in model.image_encoder.modules():
@@ -63,8 +64,9 @@ def main():
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=1.0)
 
     distiller = DISTILLER(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, 
-                          loss_weights=cfg['LOSS_WEIGHTS'], n_prompts=cfg['N_PROMPTS'], random_prompt=cfg['RANDOM_PROMPT'], edge_filter=cfg['EDGE_FILTER'],
-                          profile=cfg['PROFILE'], device=cfg['DEVICE'])
+                          loss_weights=cfg['LOSS_WEIGHTS'], n_prompts=cfg['N_PROMPTS'], random_prompt=cfg['RANDOM_PROMPT'], 
+                          edge_filter=cfg['EDGE_FILTER'], size_thr=cfg['SIZE_THR'],
+                          profile=cfg['PROFILE'], device=cfg['DEVICE'], debug=cfg['DEBUG'])
     
     if cfg['MODE'] == 'save_features':
         distiller.save_teacher_features(Path('results/teacher_features.pt'))

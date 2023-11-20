@@ -435,7 +435,6 @@ class SA1B_Dataset(torch.utils.data.Dataset):
         for _, img_dir in enumerate(split):
             img_names = os.listdir(os.path.join(root, img_dir))
             self.imgs += [os.path.join(root, img_dir, img_name) for img_name in img_names if ".jpg" in img_name]
-        # self.imgs = [s for s in self.imgs if split in s[0]] if split is not None else self.imgs
         if max is not None:
             self.imgs = self.imgs[:max]
         self.labels = labels
@@ -462,13 +461,10 @@ class SA1B_Dataset(torch.utils.data.Dataset):
 
         target, features = None, None
         if self.labels:
-            masks = json.load(open(f'{path[:-3]}json'))['annotations'] # load json masks
-            target = []
-            for i, m in enumerate(masks, 1):
-                # decode masks from COCO RLE format
-                target.append(mask_utils.decode(m['segmentation']) * i) 
-            target = np.stack(target)
-            target = np.sum(target, axis=0, dtype=np.uint8)
+            masks = json.load(open(f'{path[:-3]}json')) # load json masks
+            target = np.zeros((masks['image']['height'], masks['image']['width']), dtype=np.uint8)
+            for i, m in enumerate(masks['annotations'], 1):
+                target[mask_utils.decode(m['segmentation'])==1] = i
             if self.target_transform is not None:
                 target = self.target_transform(target)
         features = np.load(self.imgs[index].replace(".jpg", ".npy")).squeeze()
