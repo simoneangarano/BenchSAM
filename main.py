@@ -26,7 +26,7 @@ def get_args():
     parser.add_argument('--model_dir', type=str, default='bin/')
     parser.add_argument('--output_dir', type=str, default='results/')
 
-    parser.add_argument('--dataset', type=str, default='coco', choices=['coco', 'cityscapes', 'sa1b'])
+    parser.add_argument('--dataset', type=str, default='sa1b', choices=['coco', 'cityscapes', 'sa1b'])
     parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
     parser.add_argument('--crop_size', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=1)
@@ -39,6 +39,7 @@ def get_args():
     parser.add_argument('--weights', type=str, default=None)
     parser.add_argument('--sparsity', type=int, default=0)
     parser.add_argument('--pruning_method', type=str, default='none', choices=['l1norm', 'sparsegpt', 'none'])
+    parser.add_argument('--size_embed', type=str, default='none', choices=['none', 'sparse', 'dense'])
 
     # Deprecated
     # parser.add_argument('--imsize', type=int, default=1024)
@@ -49,14 +50,14 @@ def get_args():
     
     parser.add_argument('--random_prompt', type=bool, default=False) # if True, the prompt is a random point of the instance mask
     parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
-    parser.add_argument('--size_thr', type=float, default=0.0001)
+    parser.add_argument('--size_thr', type=float, default=1e-4)
     parser.add_argument('--edge_filter', type=bool, default=False) # removes edges from the instance mask before computing the prompt
     parser.add_argument('--edge_width', type=int, default=5) # width of the border to remove
     parser.add_argument('--refeed', type=bool, default=False) # if True, the mask is re-fed to the model to refine the prediction
     parser.add_argument('--sigmoid', type=bool, default=False) # if True, the output is passed through a sigmoid function
 
     parser.add_argument('--crop_mask', type=bool, default=False) # if True, the mask is cropped to the instance limits
-    parser.add_argument('--rle_encoding', type=bool, default=False) # if True, the mask is encoded in RLE format
+    parser.add_argument('--rle_encoding', type=bool, default=True) # if True, the mask is encoded in RLE format
     parser.add_argument('--save_results', type=bool, default=True)
     parser.add_argument('--experiment', type=str, default='')
     parser.add_argument('--suffix', type=str, default='')
@@ -75,7 +76,8 @@ class SinglePointInferenceEngine:
         self.output_dir = Path(args.output_dir)
         self.model_dir = Path(args.model_dir)
         self.prompt_dir = self.output_dir.joinpath(f'{args.experiment}{args.dataset}_prompts.pkl')
-        
+        if self.args.size_embed == 'sparse':
+            self.targets = pd.read_pickle(f"results/{args.experiment}{args.dataset}_{'SAM'}_0.pkl")
         if self.prompt_dir.exists():
             self.prompts = pd.read_pickle(self.prompt_dir) 
             print('Prompts loaded from file...') 
@@ -85,7 +87,6 @@ class SinglePointInferenceEngine:
 
         self.get_dataloader()
         self.get_model()
-
 
     def get_dataloader(self):
         if self.args.dataset == 'cityscapes':
@@ -104,7 +105,6 @@ class SinglePointInferenceEngine:
         self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.args.batch_size, shuffle=False, 
                                                       num_workers=self.args.num_workers, pin_memory=self.args.pin_memory, worker_init_fn=None)
 
-
     def get_model(self):
         if self.args.model == 'SAM':
             if self.args.sparsity > 0:
@@ -121,7 +121,7 @@ class SinglePointInferenceEngine:
             weights = self.args.weights if self.args.weights is not None else "mobile_sam.pt"
             print(f'Loading MobileSAM model {weights}')
             sam_checkpoint = self.model_dir.joinpath(weights)
-            predictor = sam_model_registry['vit_t'](checkpoint=sam_checkpoint).to(self.device).eval()
+            predictor = sam_model_registry['vit_t'](checkpoint=sam_checkpoint, size_embedding=self.args.size_embed).to(self.device).eval()
             self.model = SamPredictor(predictor)
         elif self.args.model == 'FastSAM':
             print('Loading FastSAM model...')
@@ -131,7 +131,7 @@ class SinglePointInferenceEngine:
             raise NotImplementedError
 
 
-    def get_output(self, img, prompt):
+    def get_output(self, img, prompt, label, name):
         if self.args.model == 'SAM':
             inputs = self.processor(img, input_points=prompt, return_tensors="pt").to(self.device)
             image_embeddings = self.model.get_image_embeddings(inputs["pixel_values"])
@@ -147,10 +147,12 @@ class SinglePointInferenceEngine:
         elif self.args.model == 'MobileSAM':
             img = img[0].detach().cpu().numpy().astype(np.uint8)
             self.model.set_image(img)
-            masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), return_logits=self.args.sigmoid)
+            size = self.targets[self.targets['name']==name]['mask_size'].values[0] if self.args.size_embed == 'sparse' else 0
+            masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), size=size, return_logits=self.args.sigmoid)
             if self.args.refeed:
                 lowres = lowres[scores.argmax()][None]
-                masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), mask_input=lowres, return_logits=self.args.sigmoid)
+                masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), size=size,
+                                                           mask_input=lowres, return_logits=self.args.sigmoid)
             mask = masks.squeeze()[scores.argmax()]
             if self.args.sigmoid:
                 mask = torch.sigmoid(mask).detach().cpu().numpy() > 0.5
@@ -174,23 +176,22 @@ class SinglePointInferenceEngine:
         # Use precomputed prompts if available
         if self.prompts is not None:
             prompt = self.prompts[self.prompts['name']==name][['prompt', 'class']]
-            return [[prompt.values[0][0]]], prompt.values[0][1] 
+            return [[prompt.values[0][0]]], label[prompt.values[0][0][1],prompt.values[0][0][0]]
             
         # Otherwise, generate a new prompt
         if self.args.edge_filter:
             e = cv2.Canny(image=label.numpy().astype(np.uint8), threshold1=10, threshold2=50)
-            e = cv2.dilate(e, np.ones((self.args.edge_width, self.args.edge_width), np.uint8), iterations = 1).astype(bool)
+            e = cv2.dilate(e, np.ones((self.args.edge_width, self.args.edge_width), np.uint8), iterations=1).astype(bool)
             label[e] = 0
 
         C, counts = np.unique(label.cpu(), return_counts=True)
         counts = (counts / counts.sum())[1:]
         C = C[1:][counts > self.args.size_thr]
         if len(C) == 0:
-            print(f'No classes found')
+            print(f'No class found')
             c = 0
         else:
             c = np.random.choice(C)
-
         x_v, y_v = np.where(label == c)
         if self.args.random_prompt:
             r = random.randint(0, len(x_v) - 1)
@@ -223,12 +224,12 @@ class SinglePointInferenceEngine:
             else:
                 (i, l, n) = sample
             prompt, p_class = self.get_prompt(n[0], l[0])
-            mask, score = self.get_output(i, prompt)
+            mask, score = self.get_output(i, prompt, l[0]==p_class, n[0])
             if self.args.crop_mask:
                 origin, _, mask = get_mask_limits([mask])
 
             name_list.append(n[0])
-            shape_list.append(i.shape[2:])
+            shape_list.append(i.shape[1:3])
             origin_list.append(origin[::-1])
             score_list.append(score)
             prompt_list.append(prompt[0][0])
@@ -244,7 +245,7 @@ class SinglePointInferenceEngine:
 
         if self.prompts is None:
             self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list,
-                                         'image_shape': shape_list})
+                                         'shape': shape_list})
             self.prompts.to_pickle(self.prompt_dir) 
             print(f'Prompts saved to file {self.prompt_dir}')
 

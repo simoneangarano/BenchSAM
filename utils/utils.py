@@ -562,9 +562,12 @@ def get_mask_limits(masks):
 def get_mask_size(s, df=None):
     if df is not None:
         imsize = df[df['name']==s['name']]['shape'].values[0]
+    if isinstance(s['mask'], dict):
+        size = np.sum(maskUtils.decode(s['mask']))
+        imsize = s['mask']['size']
     else:
-        imsize = s['shape']
-    return np.sum(s['mask']) / (imsize[0] * imsize[1])
+        size = np.sum(s['mask'])
+    return size / (imsize[0] * imsize[1])
 
 def check_prompt(sample):
     # If the prompt is not in the mask, it is to be considered (no prompt predicted)

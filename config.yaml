@@ -1,15 +1,15 @@
 # GENERAL
-GPU: 3
+GPU: 6
 MODE: 'decoder' # encoder, decoder, save_features
 CKPT: "bin/mobile_sam.pt" # "bin/mobile_sam.pt"
-EXP: 'iou_lr'
+EXP: 'gt'
 PROFILE: False
 DEBUG: False
 
 # DATA
 DATA_DIR: '../Datasets/'
 SPLIT: 'sa_000020'
-TRAIN_SPLITS: 5
+TRAIN_SPLITS: 1
 MAX_TEST: 2500
 BATCH_SIZE: 16
 NUM_WORKERS: 8
@@ -29,8 +29,5 @@ OPTIM: 'adam'
 SCHEDULER: 'cos'
 DECAY: 1.0
 WD: 1.e-5
-LOSS_WEIGHTS: [0,0,0,1,0,0,0] # self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.KW 
+LOSS_WEIGHTS: [0,0,0,0,0,0,1] # self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW 
 SIZE_EMBEDDING: 'none' # sparse, dense
-
-# note: try smaller learning rate for finetuning
-# note: check multiple masks sa1b_000020

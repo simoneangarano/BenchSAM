@@ -115,7 +115,7 @@ class PromptEncoder(nn.Module):
     
     def _embed_size(self, size: torch.Tensor) -> torch.Tensor:
         """Embeds size prompts."""
-        size_class = torch.tensor(self.size_to_label(size), device=size.device).unsqueeze(0)
+        size_class = torch.tensor(self.size_to_label(size), device=self._get_device()).unsqueeze(0)
         size_embedding = self.point_embeddings[4](size_class)
         return size_embedding
 
