@@ -22,7 +22,7 @@ class PromptEncoder(nn.Module):
         input_image_size: Tuple[int, int],
         mask_in_chans: int,
         activation: Type[nn.Module] = nn.GELU,
-        size_embedding: str = 'none'
+        add_prompt = None
     ) -> None:
         """
         Encodes prompts for input to SAM's mask decoder.
@@ -42,15 +42,17 @@ class PromptEncoder(nn.Module):
         self.embed_dim = embed_dim
         self.input_image_size = input_image_size
         self.image_embedding_size = image_embedding_size
-        self.size_embedding = size_embedding            
+        self.add_prompt = add_prompt            
         self.pe_layer = PositionEmbeddingRandom(embed_dim // 2)
         self.DELIMITERS = [5e-4, 8e-4, 1e-3, 2e-3, 3e-3, 5e-3, 9e-3, 2e-2, 9e-2]
         self.CLASSES = list(range(len(self.DELIMITERS)+1))
 
         self.num_point_embeddings: int = 4 # pos/neg point + 2 box corners
         point_embeddings = [nn.Embedding(1, embed_dim) for _ in range(self.num_point_embeddings)]
-        if self.size_embedding == 'sparse':
+        if self.add_prompt == 'size':
             point_embeddings.append(nn.Embedding(len(self.DELIMITERS)+1, embed_dim))
+        elif self.add_prompt == 'random':
+            point_embeddings.append(nn.Embedding(1, embed_dim))
         self.point_embeddings = nn.ModuleList(point_embeddings)
         self.not_a_point_embed = nn.Embedding(1, embed_dim)
 
@@ -178,8 +180,11 @@ class PromptEncoder(nn.Module):
         if boxes is not None:
             box_embeddings = self._embed_boxes(boxes)
             sparse_embeddings = torch.cat([sparse_embeddings, box_embeddings], dim=1)
-        if self.size_embedding == 'sparse':
+        if self.add_prompt == 'size':
             size_embedding = self._embed_size(size).unsqueeze(0)
+            sparse_embeddings = torch.cat([sparse_embeddings, size_embedding], dim=1)
+        elif self.add_prompt == 'random':
+            size_embedding = self.point_embeddings[4](torch.tensor(0, device=self._get_device()))[None,None,...]
             sparse_embeddings = torch.cat([sparse_embeddings, size_embedding], dim=1)
 
         if masks is not None:
@@ -188,8 +193,6 @@ class PromptEncoder(nn.Module):
             dense_embeddings = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(
                 bs, -1, self.image_embedding_size[0], self.image_embedding_size[1]
             )
-            if self.size_embedding == 'dense':
-                dense_embeddings = dense_embeddings * size
 
         return sparse_embeddings, dense_embeddings
 

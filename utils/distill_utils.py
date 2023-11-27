@@ -14,7 +14,7 @@ from utils import misc
 
 # Distillers
 class Distiller():
-    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device, debug=False):
+    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, cfg):
         self.teacher = teacher
         self.student = student
         self.processor = processor
@@ -22,8 +22,9 @@ class Distiller():
         self.test_dataloader = test_dataloader
         self.optimizer = optimizer
         self.scheduler = scheduler
-        self.device = device
-        self.debug = debug
+        self.device = cfg['DEVICE']
+        self.debug = cfg['DEBUG']
+        self.cfg = cfg
     
     def save_teacher_features(self, path):
         ids, features = [], []
@@ -40,8 +41,8 @@ class Distiller():
         pd.DataFrame(ids).to_csv(path.parent.joinpath('feature_ids.csv'), index=False)
 
 class EncDistiller(Distiller):
-    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device):
-        self.super().__init__(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device)
+    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, cfg):
+        self.super().__init__(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, cfg)
 
     def get_loss(self, img, feats):
         self.student.set_image(img[0].permute((2,0,1)))
@@ -82,13 +83,11 @@ class EncDistiller(Distiller):
             torch.save(self.student.model.state_dict(), 'bin/distilled_mobile_sam.pt')
 
 class DecDistiller(Distiller):
-    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, 
-                 loss_weights=[0,0,0,0,0,0,0], 
-                 n_prompts=1, random_prompt=True, edge_filter=True, size_thr=0, profile=False, device='cuda', debug=False):
+    def __init__(self, teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, cfg):
         
-        super().__init__(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, device, debug)
+        super().__init__(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, cfg)
 
-        self.edge_filter = edge_filter
+        self.edge_filter = cfg['EDGE_FILTER']
         self.edge_width = 20
         self.mse_loss = torch.nn.MSELoss(reduction='mean').to(self.device)
         self.focal_loss = FocalLoss().to(self.device) # FocalLoss().to(self.device)
@@ -96,11 +95,12 @@ class DecDistiller(Distiller):
         self.bce_loss = BBCEWithLogitLoss().to(self.device)
         self.iou_loss = IoULoss().to(self.device)
         self.bound_loss = BoundaryLoss().to(self.device)
-        self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW = loss_weights
-        self.n_prompts = n_prompts
-        self.random_prompt = random_prompt
-        self.size_thr = size_thr
-        self.pr = cProfile.Profile() if profile else None
+        self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW = cfg['LOSS_WEIGHTS']
+        self.n_prompts = cfg['N_PROMPTS']
+        self.random_prompt = cfg['RANDOM_PROMPT']
+        self.size_thr_low = cfg['SIZE_THR_LOW']
+        self.size_thr_high = cfg['SIZE_THR_HIGH']
+        self.pr = cProfile.Profile() if cfg['PROFILE'] else None
         self.best_iou = 0
 
     def get_features(self, img):
@@ -140,28 +140,25 @@ class DecDistiller(Distiller):
             loss.backward(retain_graph=True)
             self.update_metrics(loss*acc, focal/len(prompts), bce/len(prompts), iou/len(prompts), dice/len(prompts), iou_gt/len(prompts))
 
-    def distill(self, epochs=8, acc=4, use_saved_features=False, name=''):
-        self.acc = acc
+    def distill(self, name=''):
+        self.acc = self.cfg['BATCH_SIZE']
         if self.pr:
             self.pr.enable()
-        for e in range(epochs):
-            print(f'Epoch {e+1}/{epochs} LR {self.optimizer.param_groups[0]["lr"]:.0e}')
-            self.student.model.mask_decoder.train()
-            self.student.model.prompt_encoder.train()
-            self.student.model.image_encoder.eval()
-
+        for e in range(self.cfg['EPOCHS']):
+            print(f"Epoch {e+1}/{self.cfg['EPOCHS']} LR {self.optimizer.param_groups[0]['lr']:.0e}")
+            self.set_trainable_weights()
             self.t = qqdm(self.dataloader, desc=format_str('bold', 'Distillation'))
             self.init_metrics()
             for i, (img, label, _, feats) in enumerate(self.t):
-                self.step(img, label, feats, acc, use_saved_features)
-                if (i+1) % acc == 0 or i+1 == len(self.dataloader):
-                    self.print_metrics(i, acc)
+                self.step(img, label, feats, self.cfg['BATCH_SIZE'], self.cfg['LOAD_FEATURES'])
+                if (i+1) % self.cfg['BATCH_SIZE'] == 0 or i+1 == len(self.dataloader):
+                    self.print_metrics(i, self.cfg['BATCH_SIZE'])
                     self.optimizer.step()
                     self.optimizer.zero_grad()
 
-            miou = self.validate(use_saved_features=use_saved_features)
+            miou = self.validate(use_saved_features=self.cfg['LOAD_FEATURES'])
             if miou > self.best_iou:
-                torch.save(self.student.model.state_dict(), f'bin/distilled_mobile_sam_{name}.pt')
+                torch.save(self.student.model.state_dict(), f"bin/distilled_mobile_sam_{name}.pt")
                 self.best_iou = miou
             self.scheduler.step()
 
@@ -172,10 +169,7 @@ class DecDistiller(Distiller):
                 ps.print_stats(.1)
 
     def validate(self, use_saved_features=False):
-        self.student.model.mask_decoder.eval()
-        self.student.model.prompt_encoder.eval()
-        self.student.model.image_encoder.eval()
-
+        self.set_trainable_weights(train=False)
         with torch.no_grad():
             t = qqdm(self.test_dataloader, desc=format_str('bold', 'Validation'))
             r_bce, r_iou, r_loss, r_focal, r_dice, r_iougt = 0, 0, 0, 0, 0, 0
@@ -246,7 +240,7 @@ class DecDistiller(Distiller):
             label[e] = 0
         C, counts = np.unique(label.cpu(), return_counts=True)
         counts = (counts / counts.sum())[1:]
-        C = C[1:][counts > self.size_thr]
+        C = C[1:][(counts > self.size_thr_low) * (counts < self.size_thr_high)]
         # C = C[1:] if C[0] == 0 else C
         # if len(C) == 0:
         #     c = 0
@@ -282,7 +276,22 @@ class DecDistiller(Distiller):
         self.t.set_infos({'Loss':f'{self.r_loss/(i+1):.2e}', 'Focal':f'{self.r_focal/(i+1):.2e}', 
                           'BCE':f'{self.r_bce/(i+1):.1e}', 'Dice':f'{self.r_dice/(i+1):.3f}', 
                           'IoU':f'{self.r_iou/(i+1):.3f}', 'IoU_gt':f'{self.r_iougt/(i+1):.3f}'}) 
-        
+    
+    def set_trainable_weights(self, train=True):
+        if train:
+            if self.cfg['MODE'] == 'decoder':
+                self.student.model.mask_decoder.train()
+                self.student.model.prompt_encoder.train()
+                self.student.model.image_encoder.eval()
+            elif self.cfg['MODE'] == 'prompt':
+                self.student.model.prompt_encoder.point_embeddings[4].train()
+            else:
+                raise ValueError(f"Invalid mode: {self.cfg['MODE']}")
+        else:
+            self.student.model.mask_decoder.eval()
+            self.student.model.prompt_encoder.eval()
+            self.student.model.image_encoder.eval()
+
 
 
 # Loss Functions

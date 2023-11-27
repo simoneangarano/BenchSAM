@@ -5,7 +5,7 @@ import gc
 
 import numpy as np
 import pandas as pd
-import cv2
+import cv2, json, yaml
 
 import torch
 from pycocotools import mask as maskUtils
@@ -63,21 +63,21 @@ def get_args():
     parser.add_argument('--suffix', type=str, default='')
 
     args = parser.parse_args()
-    # print('\n'.join(f'{k}={v}' for k, v in vars(args).items()))
+    # print('\n'.join(f"{k}={v}" for k, v in vars(args).items()))
     return args
 
 
 
 class SinglePointInferenceEngine:
-    def __init__(self, args, device):
-        self.args = args
+    def __init__(self, cfg, device):
+        self.cfg = cfg
         self.device = device
-        self.data_dir = Path(args.data_dir)
-        self.output_dir = Path(args.output_dir)
-        self.model_dir = Path(args.model_dir)
-        self.prompt_dir = self.output_dir.joinpath(f'{args.experiment}{args.dataset}_prompts.pkl')
-        if self.args.size_embed == 'sparse':
-            self.targets = pd.read_pickle(f"results/{args.experiment}{args.dataset}_{'SAM'}_0.pkl")
+        self.data_dir = Path(cfg['DATA_DIR'])
+        self.output_dir = Path(cfg['OUTPUT_DIR'])
+        self.model_dir = Path(cfg['MODEL_DIR'])
+        self.prompt_dir = self.output_dir.joinpath(f"{cfg['EXP']}{cfg['DATASET']}_prompts.pkl")
+        if self.cfg['SIZE_EMBED'] == 'sparse':
+            self.targets = pd.read_pickle(f"results/{cfg['EXP']}{cfg['DATASET']}_SAM_0.pkl")
         if self.prompt_dir.exists():
             self.prompts = pd.read_pickle(self.prompt_dir) 
             print('Prompts loaded from file...') 
@@ -89,11 +89,11 @@ class SinglePointInferenceEngine:
         self.get_model()
 
     def get_dataloader(self):
-        if self.args.dataset == 'cityscapes':
-            dataset = CitySegmentation(root=self.data_dir.joinpath('Cityscapes'), split=self.args.split, crop_size=self.args.crop_size)
-        elif self.args.dataset == 'coco':
-            dataset = COCOSegmentation(root=self.data_dir.joinpath('coco-2017/'), split=self.args.split, crop_size=self.args.crop_size)
-        elif self.args.dataset == 'sa1b':
+        if self.cfg['DATASET'] == 'cityscapes':
+            dataset = CitySegmentation(root=self.data_dir.joinpath('Cityscapes'), split=self.cfg['SPLIT'], crop_size=self.cfg['CROP_SIZE'])
+        elif self.cfg['DATASET'] == 'coco':
+            dataset = COCOSegmentation(root=self.data_dir.joinpath('coco-2017/'), split=self.cfg['SPLIT'], crop_size=self.cfg['CROP_SIZE'])
+        elif self.cfg['DATASET'] == 'sa1b':
             dataset = SA1B_Dataset(root=self.data_dir.joinpath('SA_1B/images/'), split=["sa_000020"],
                                    features=None, labels=True)
         else:
@@ -102,28 +102,28 @@ class SinglePointInferenceEngine:
         self.classes = dataset.classes
         self.n_classes = dataset.num_class
 
-        self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.args.batch_size, shuffle=False, 
-                                                      num_workers=self.args.num_workers, pin_memory=self.args.pin_memory, worker_init_fn=None)
+        self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.cfg['BATCH_SIZE'], shuffle=False, 
+                                                      num_workers=self.cfg['NUM_WORKERS'], pin_memory=self.cfg['PIN_MEMORY'], worker_init_fn=None)
 
     def get_model(self):
-        if self.args.model == 'SAM':
-            if self.args.sparsity > 0:
+        if self.cfg['MODEL'] == 'SAM':
+            if self.cfg['SPARSITY'] > 0:
                 print('Loading sparse model...')
-                if self.args.pruning_method == 'l1norm':
-                    self.model = SamModel.from_pretrained(self.model_dir.joinpath(f'GUP_L1_{self.args.sparsity}')).to(self.device).eval()
-                elif self.args.pruning_method == 'sparsegpt':
-                    self.model = SamModel.from_pretrained(self.model_dir.joinpath(f'{self.args.sparsity}')).to(self.device).eval()
+                if self.cfg['PRUNING_METHOD'] == 'l1norm':
+                    self.model = SamModel.from_pretrained(self.model_dir.joinpath(f"GUP_L1_{self.cfg['SPARSITY']}")).to(self.device).eval()
+                elif self.cfg['PRUNING_METHOD'] == 'sparsegpt':
+                    self.model = SamModel.from_pretrained(self.model_dir.joinpath(f"{self.cfg['SPARSITY']}")).to(self.device).eval()
             else:
                 print('Loading dense model...')
                 self.model = SamModel.from_pretrained('facebook/sam-vit-huge').to(self.device).eval()
             self.processor = SamProcessor.from_pretrained('facebook/sam-vit-huge')
-        elif self.args.model == 'MobileSAM':
-            weights = self.args.weights if self.args.weights is not None else "mobile_sam.pt"
-            print(f'Loading MobileSAM model {weights}')
+        elif self.cfg['MODEL'] == 'MobileSAM':
+            weights = self.cfg['CKPT'] if self.cfg['CKPT'] is not None else "mobile_sam.pt"
+            print(f"Loading MobileSAM model {weights}")
             sam_checkpoint = self.model_dir.joinpath(weights)
-            predictor = sam_model_registry['vit_t'](checkpoint=sam_checkpoint, size_embedding=self.args.size_embed).to(self.device).eval()
+            predictor = sam_model_registry['vit_t'](checkpoint=sam_checkpoint, size_embedding=self.cfg['SIZE_EMBED']).to(self.device).eval()
             self.model = SamPredictor(predictor)
-        elif self.args.model == 'FastSAM':
+        elif self.cfg['MODEL'] == 'FastSAM':
             print('Loading FastSAM model...')
             self.model = FastSAM(self.model_dir.joinpath('FastSAM.pt'))
             self.model.to(self.device)
@@ -132,7 +132,7 @@ class SinglePointInferenceEngine:
 
 
     def get_output(self, img, prompt, label, name):
-        if self.args.model == 'SAM':
+        if self.cfg['MODEL'] == 'SAM':
             inputs = self.processor(img, input_points=prompt, return_tensors="pt").to(self.device)
             image_embeddings = self.model.get_image_embeddings(inputs["pixel_values"])
             inputs.pop("pixel_values", None) # pixel_values are no more needed
@@ -144,24 +144,24 @@ class SinglePointInferenceEngine:
             scores = outputs.iou_scores
             mask = masks.squeeze()[scores.argmax()].cpu().detach().numpy()
             score = float(scores.max().cpu().detach().numpy())
-        elif self.args.model == 'MobileSAM':
+        elif self.cfg['MODEL'] == 'MobileSAM':
             img = img[0].detach().cpu().numpy().astype(np.uint8)
             self.model.set_image(img)
-            size = self.targets[self.targets['name']==name]['mask_size'].values[0] if self.args.size_embed == 'sparse' else 0
-            masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), size=size, return_logits=self.args.sigmoid)
-            if self.args.refeed:
+            size = self.targets[self.targets['name']==name]['mask_size'].values[0] if self.cfg['SIZE_EMBED'] == 'sparse' else 0
+            masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), size=size, return_logits=self.cfg['SIGMOID'])
+            if self.cfg['REFEED']:
                 lowres = lowres[scores.argmax()][None]
                 masks, scores, lowres = self.model.predict(np.array(prompt[0]), np.array([1]), size=size,
-                                                           mask_input=lowres, return_logits=self.args.sigmoid)
+                                                           mask_input=lowres, return_logits=self.cfg['SIGMOID'])
             mask = masks.squeeze()[scores.argmax()]
-            if self.args.sigmoid:
+            if self.cfg['SIGMOID']:
                 mask = torch.sigmoid(mask).detach().cpu().numpy() > 0.5
             score = float(scores.max())
-        elif self.args.model == 'FastSAM':
+        elif self.cfg['MODEL'] == 'FastSAM':
             img = img[0].detach().cpu().numpy().astype(np.uint8)
             everything_results = self.model(img, device=self.device, verbose=False) # DEPRECATED ARGS
-                                            # retina_masks=self.args.retina, imgsz=self.args.imsize, 
-                                            # conf=self.args.conf_thr, iou=self.args.iou_thr)
+                                            # retina_masks=self.cfg['RETINA'], imgsz=self.cfg['IMSIZE'], 
+                                            # conf=self.cfg['CONF_THR'], iou=self.cfg['IOU_THR'])
             prompt_process = FastSAMPrompt(img, everything_results, device=self.device)
             mask, score = prompt_process.point_prompt(points=prompt[0], pointlabel=[1])
             mask = torch.nn.functional.interpolate(mask[None,None].to(torch.uint8),[img.shape[0], img.shape[1]], 
@@ -179,21 +179,21 @@ class SinglePointInferenceEngine:
             return [[prompt.values[0][0]]], label[prompt.values[0][0][1],prompt.values[0][0][0]]
             
         # Otherwise, generate a new prompt
-        if self.args.edge_filter:
+        if self.cfg['EDGE_WIDTH']:
             e = cv2.Canny(image=label.numpy().astype(np.uint8), threshold1=10, threshold2=50)
-            e = cv2.dilate(e, np.ones((self.args.edge_width, self.args.edge_width), np.uint8), iterations=1).astype(bool)
+            e = cv2.dilate(e, np.ones((self.cfg['EDGE_WIDTH'], self.cfg['EDGE_WIDTH']), np.uint8), iterations=1).astype(bool)
             label[e] = 0
 
         C, counts = np.unique(label.cpu(), return_counts=True)
         counts = (counts / counts.sum())[1:]
-        C = C[1:][counts > self.args.size_thr]
+        C = C[1:][counts > self.cfg['SIZE_THR']]
         if len(C) == 0:
-            print(f'No class found')
+            print('No class found')
             c = 0
         else:
             c = np.random.choice(C)
         x_v, y_v = np.where(label == c)
-        if self.args.random_prompt:
+        if self.cfg['RANDOM_PROMPT']:
             r = random.randint(0, len(x_v) - 1)
             x, y = x_v[r], y_v[r]
         else: # central prompt
@@ -209,7 +209,7 @@ class SinglePointInferenceEngine:
         h, _ = np.histogram(m, bins=256, range=(0,255))
         clean_h = h[:self.n_classes]
         mask_tot = np.sum(clean_h)
-        classes = np.where(clean_h > self.args.class_thr * mask_tot)[0]
+        classes = np.where(clean_h > self.cfg['CLASS_THR'] * mask_tot)[0]
         return list(classes)
 
 
@@ -219,13 +219,13 @@ class SinglePointInferenceEngine:
 
         origin = [0,0]
         for _, sample in enumerate(tqdm(self.dataloader)):
-            if self.args.dataset == 'sa1b':
+            if self.cfg['DATASET'] == 'sa1b':
                 (i, l, n, _) = sample
             else:
                 (i, l, n) = sample
             prompt, p_class = self.get_prompt(n[0], l[0])
             mask, score = self.get_output(i, prompt, l[0]==p_class, n[0])
-            if self.args.crop_mask:
+            if self.cfg['CROP_MASK']:
                 origin, _, mask = get_mask_limits([mask])
 
             name_list.append(n[0])
@@ -233,13 +233,13 @@ class SinglePointInferenceEngine:
             origin_list.append(origin[::-1])
             score_list.append(score)
             prompt_list.append(prompt[0][0])
-            if self.args.dataset == 'sa1b':
+            if self.cfg['DATASET'] == 'sa1b':
                 p_class_list.append(None)
                 s_class_list.append(None)
             else:
                 p_class_list.append(int(p_class))
                 s_class_list.append(list(self.get_pred_classes(mask, l)))
-            if self.args.rle_encoding:
+            if self.cfg['RLE_ENCODING']:
                 mask = maskUtils.encode(np.asfortranarray(mask))
             mask_list.append(mask)
 
@@ -247,31 +247,33 @@ class SinglePointInferenceEngine:
             self.prompts = pd.DataFrame({'name': name_list, 'prompt': prompt_list, 'class': p_class_list,
                                          'shape': shape_list})
             self.prompts.to_pickle(self.prompt_dir) 
-            print(f'Prompts saved to file {self.prompt_dir}')
+            print(f"Prompts saved to file {self.prompt_dir}")
 
         return name_list, prompt_list, p_class_list, s_class_list, mask_list, origin_list, score_list
 
 
 
 def main():
-    args = get_args()
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
-    device = torch.device(f'cuda:{args.cuda}' if torch.cuda.is_available() else 'cpu')    
+    #args = get_args()
+    with open('config_inference.yaml', 'r') as f:
+        cfg = yaml.load(f, Loader=yaml.FullLoader)
+    torch.manual_seed(cfg['SEED'])
+    np.random.seed(cfg['SEED'])
+    random.seed(cfg['SEED'])
+    device = torch.device(f"cuda:{cfg['GPU']}" if torch.cuda.is_available() else 'cpu')    
 
-    spie = SinglePointInferenceEngine(args, device)
+    spie = SinglePointInferenceEngine(cfg, device)
     print('Extracting masks...')
     name, prompt, p_class, s_class, mask, origin, score = spie.get_masks()
 
-    if args.save_results:
+    if cfg['SAVE_RESULTS']:
         print('Saving results...')
         df = pd.DataFrame({'name': name, 'prompt': prompt, 'class': p_class, 's_class': s_class, 
                            'mask': mask, 'mask_origin': origin, 'score': score})
-        p = '_gup' if args.pruning_method == 'l1norm' else ''
-        out_file = spie.output_dir.joinpath(f'{args.experiment}{args.dataset}_{args.model}{args.suffix}_{args.sparsity}{p}.pkl')
+        p = '_gup' if cfg['PRUNING_METHOD'] == 'l1norm' else ''
+        out_file = spie.output_dir.joinpath(f"{cfg['EXP']}{cfg['DATASET']}_{cfg['MODEL']}{cfg['SUFFIX']}_{cfg['SPARSITY']}{p}.pkl")
         df.to_pickle(out_file)
-        print(f'Results saved! {out_file}')
+        print(f"Results saved! {out_file}")
 
         del df, spie
         gc.collect()

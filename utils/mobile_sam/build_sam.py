@@ -45,7 +45,7 @@ def build_sam_vit_b(checkpoint=None):
     )
 
 
-def build_sam_vit_t(checkpoint=None, size_embedding='none'):
+def build_sam_vit_t(checkpoint=None, add_prompt=None):
     prompt_embed_dim = 256
     image_size = 1024
     vit_patch_size = 16
@@ -69,7 +69,7 @@ def build_sam_vit_t(checkpoint=None, size_embedding='none'):
             image_embedding_size=(image_embedding_size, image_embedding_size),
             input_image_size=(image_size, image_size),
             mask_in_chans=16,
-            size_embedding=size_embedding
+            add_prompt=add_prompt
             ),
             mask_decoder=MaskDecoder(
                     num_multimask_outputs=3,

@@ -1,8 +1,8 @@
 # GENERAL
-GPU: 6
-MODE: 'decoder' # encoder, decoder, save_features
-CKPT: "bin/mobile_sam.pt" # "bin/mobile_sam.pt"
-EXP: 'gt'
+GPU: 1
+MODE: 'prompt' # encoder, decoder, prompt, save_features
+CKPT: 'bin/mobile_sam.pt' # 'bin/mobile_sam.pt'
+EXP: 'prompt'
 PROFILE: False
 DEBUG: False
 
@@ -20,14 +20,15 @@ LOAD_FEATURES: True
 N_PROMPTS: 1
 RANDOM_PROMPT: False
 EDGE_FILTER: False
-SIZE_THR: 1.e-4
+SIZE_THR_LOW: 1.e-4 # 0
+SIZE_THR_HIGH: 5.e-4 # 1
 
 # TRAINING
 EPOCHS: 20
-LR: 3.e-6
+LR: 3.e-4
 OPTIM: 'adam'
 SCHEDULER: 'cos'
 DECAY: 1.0
 WD: 1.e-5
-LOSS_WEIGHTS: [0,0,0,0,0,0,1] # self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW 
-SIZE_EMBEDDING: 'none' # sparse, dense
+LOSS_WEIGHTS: [0,0,0,1,0,0,0] # self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW 
+ADD_PROMPT: 'random' # size, random

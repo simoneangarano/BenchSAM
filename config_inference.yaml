@@ -1,0 +1,47 @@
+# GENERAL
+GPU: 1
+EXP: 'center_'
+SUFFIX: '_iou_lr'
+SAVE_RESULTS: True
+PROFILE: False
+DEBUG: False
+SEED: 0
+
+# FOLDERS
+MODEL_DIR: 'bin/'
+OUTPUT_DIR: 'results/'
+DATA_DIR: '../Datasets/'
+
+# DATA
+DATASET: 'sa1b'
+SPLIT: 'val'
+CROP_SIZE: 0
+BATCH_SIZE: 1
+NUM_WORKERS: 8
+PIN_MEMORY: True
+SHUFFLE: False
+
+# MODEL
+MODEL: 'MobileSAM' # SAM, MobileSAM, FastSAM
+CKPT: "distilled_mobile_sam_decoder_iou_lr.pt" # "mobile_sam.pt"
+SPARSITY: 0
+PRUNING_METHOD: 'none' # l1norm, sparsegpt, none
+SIZE_EMBED: 'none' # sparse, dense
+
+# PROMPTS
+N_PROMPTS: 1
+RANDOM_PROMPT: False
+EDGE_FILTER: False
+SIZE_THR: 1.e-4
+CLASS_THR: 0.05
+EDGE_WIDTH: 5
+REFEED: False
+SIGMOID: False
+RLE_ENCODING: True
+CROP_MASK: False
+
+# DEPRECATED
+# IMSIZE: 1024
+# RETINA: True
+# CONF_THR: 0.25
+# IOU_THR: 0.0

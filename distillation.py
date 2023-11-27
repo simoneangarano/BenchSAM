@@ -1,4 +1,5 @@
 from pathlib import Path
+from cv2 import add
 import yaml
 import json
 
@@ -16,7 +17,7 @@ from utils.distill_utils import *
 
 
 def main():
-    with open('config.yaml', 'r') as f:
+    with open('config_distillation.yaml', 'r') as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
     json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'))
     cfg['DATA_DIR'] = Path(cfg['DATA_DIR'])
@@ -35,7 +36,7 @@ def main():
     processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
 
     sam_checkpoint = cfg['CKPT'] if cfg['PRETRAINED'] else None
-    model = sam_model_registry["vit_t"](checkpoint=sam_checkpoint, size_embedding=cfg['SIZE_EMBEDDING']).to(cfg['DEVICE'])
+    model = sam_model_registry["vit_t"](checkpoint=sam_checkpoint, add_prompt=cfg['ADD_PROMPT']).to(cfg['DEVICE'])
     model.eval()
     for m in model.image_encoder.modules():
         if isinstance(m, torch.nn.BatchNorm2d):
@@ -47,9 +48,14 @@ def main():
     if cfg['MODE'] == 'encoder':
         DISTILLER = EncDistiller
         params = student.model.image_encoder.parameters()
-    else:
+    elif cfg['MODE'] == 'decoder':
         DISTILLER = DecDistiller
         params = list(student.model.mask_decoder.parameters()) + list(student.model.prompt_encoder.parameters())
+    elif cfg['MODE'] == 'prompt':
+        DISTILLER = DecDistiller
+        params = student.model.prompt_encoder.point_embeddings[4].parameters()
+    else:
+        raise ValueError(f"Invalid mode: {cfg['MODE']}")
 
     if cfg['OPTIM'] == 'adamw':
         optimizer = torch.optim.AdamW(params, lr=cfg['LR'], weight_decay=cfg['WD'])
@@ -63,15 +69,12 @@ def main():
     elif cfg['SCHEDULER'] == 'none':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=1.0)
 
-    distiller = DISTILLER(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, 
-                          loss_weights=cfg['LOSS_WEIGHTS'], n_prompts=cfg['N_PROMPTS'], random_prompt=cfg['RANDOM_PROMPT'], 
-                          edge_filter=cfg['EDGE_FILTER'], size_thr=cfg['SIZE_THR'],
-                          profile=cfg['PROFILE'], device=cfg['DEVICE'], debug=cfg['DEBUG'])
+    distiller = DISTILLER(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, cfg)
     
     if cfg['MODE'] == 'save_features':
         distiller.save_teacher_features(Path('results/teacher_features.pt'))
     else:
-        distiller.distill(epochs=cfg['EPOCHS'], acc=cfg['BATCH_SIZE'], use_saved_features=cfg['LOAD_FEATURES'], name=f"{cfg['MODE']}_{cfg['EXP']}")
+        distiller.distill(name=f"{cfg['MODE']}_{cfg['EXP']}")
 
 
 
