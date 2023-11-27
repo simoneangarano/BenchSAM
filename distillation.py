@@ -1,5 +1,4 @@
 from pathlib import Path
-from cv2 import add
 import yaml
 import json
 
@@ -22,7 +21,7 @@ def main():
     json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'))
     cfg['DATA_DIR'] = Path(cfg['DATA_DIR'])
     cfg['DEVICE'] = torch.device(f"cuda:{cfg['GPU']}" if torch.cuda.is_available() else "cpu")
-    cfg['PRETRAINED'] = True if cfg['MODE'] == 'decoder' else False
+    cfg['PRETRAINED'] = True if cfg['MODE'] in ['decoder', 'prompt'] else False
 
     dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=["sa_00000" + str(i) for i in range(cfg['TRAIN_SPLITS'])],
                            features=None, labels=True)

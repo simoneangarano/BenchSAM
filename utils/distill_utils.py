@@ -155,6 +155,7 @@ class DecDistiller(Distiller):
                     self.print_metrics(i, self.cfg['BATCH_SIZE'])
                     self.optimizer.step()
                     self.optimizer.zero_grad()
+                    torch.save(self.student.model.state_dict(), f"bin/distilled_mobile_sam_{name}.pt")
 
             miou = self.validate(use_saved_features=self.cfg['LOAD_FEATURES'])
             if miou > self.best_iou:
@@ -240,14 +241,14 @@ class DecDistiller(Distiller):
             label[e] = 0
         C, counts = np.unique(label.cpu(), return_counts=True)
         counts = (counts / counts.sum())[1:]
-        C = C[1:][(counts > self.size_thr_low) * (counts < self.size_thr_high)]
+        Cf = C[1:][(counts > self.size_thr_low) * (counts < self.size_thr_high)]
         # C = C[1:] if C[0] == 0 else C
-        # if len(C) == 0:
-        #     c = 0
+        if len(Cf) == 0:
+            Cf = C[1:][counts > self.size_thr_low]
         # else:
         if seed is not None:
             np.random.seed(seed)
-        c = np.random.choice(C)
+        c = np.random.choice(Cf)
 
         x_v, y_v = np.where(label.cpu() == c)
         if self.random_prompt:
