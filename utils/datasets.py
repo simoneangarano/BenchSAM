@@ -141,7 +141,7 @@ class CitySegmentation(SegmentationDataset):
     def __init__(self, root='../datasets/citys', split='train', mode=None, transform=None, **kwargs):
         super(CitySegmentation, self).__init__(root, split, mode, transform, **kwargs)
         assert os.path.exists(self.root), "Please setup the dataset using ../datasets/cityscapes.py"
-        self.images, self.mask_paths = _get_city_pairs(self.root, self.split)
+        self.images, self.mask_paths = self._get_city_pairs()
         assert (len(self.images) == len(self.mask_paths))
         if len(self.images) == 0:
             raise RuntimeError("Found 0 images in subfolders of:" + root + "\n")
@@ -187,6 +187,43 @@ class CitySegmentation(SegmentationDataset):
         target = self._class_to_index(np.array(mask).astype('int32'))
         return torch.LongTensor(np.array(target).astype('int32'))
 
+    def _get_city_pairs(self):
+        def get_path_pairs(img_folder, mask_folder):
+            img_paths = []
+            mask_paths = []
+            for root, _, files in os.walk(img_folder):
+                for filename in files:
+                    if filename.endswith('.png'):
+                        imgpath = os.path.join(root, filename)
+                        foldername = os.path.basename(os.path.dirname(imgpath))
+                        maskname = filename.replace('leftImg8bit', 'gtFine_labelIds')
+                        maskpath = os.path.join(mask_folder, foldername, maskname)
+                        if os.path.isfile(imgpath) and os.path.isfile(maskpath):
+                            img_paths.append(imgpath)
+                            mask_paths.append(maskpath)
+                        else:
+                            print('cannot find the mask or image:', imgpath, maskpath)
+            print('Found {} images in the folder {}'.format(len(img_paths), img_folder))
+            return img_paths, mask_paths
+
+        if self.split in ('train', 'val'):
+            img_folder = os.path.join(self.root, 'leftImg8bit/' + self.split)
+            mask_folder = os.path.join(self.root, 'gtFine/' + self.split)
+            img_paths, mask_paths = get_path_pairs(img_folder, mask_folder)
+            return img_paths, mask_paths
+        else:
+            assert self.split == 'trainval'
+            print('trainval set')
+            train_img_folder = os.path.join(self.root, 'leftImg8bit/train')
+            train_mask_folder = os.path.join(self.root, 'gtFine/train')
+            val_img_folder = os.path.join(self.root, 'leftImg8bit/val')
+            val_mask_folder = os.path.join(self.root, 'gtFine/val')
+            train_img_paths, train_mask_paths = get_path_pairs(train_img_folder, train_mask_folder)
+            val_img_paths, val_mask_paths = get_path_pairs(val_img_folder, val_mask_folder)
+            img_paths = train_img_paths + val_img_paths
+            mask_paths = train_mask_paths + val_mask_paths
+        return img_paths, mask_paths
+    
     def __len__(self):
         return len(self.images)
 
@@ -217,43 +254,6 @@ class CitySegmentation(SegmentationDataset):
                 'Bicycle',      # 33
                 # 'Void'         # -1, 0, 1, 2, 3, 4, 5, 6, 9, 10, 14, 15, 16, 18, 29, 30
                 )
-
-def _get_city_pairs(folder, split='train'):
-    def get_path_pairs(img_folder, mask_folder):
-        img_paths = []
-        mask_paths = []
-        for root, _, files in os.walk(img_folder):
-            for filename in files:
-                if filename.endswith('.png'):
-                    imgpath = os.path.join(root, filename)
-                    foldername = os.path.basename(os.path.dirname(imgpath))
-                    maskname = filename.replace('leftImg8bit', 'gtFine_labelIds')
-                    maskpath = os.path.join(mask_folder, foldername, maskname)
-                    if os.path.isfile(imgpath) and os.path.isfile(maskpath):
-                        img_paths.append(imgpath)
-                        mask_paths.append(maskpath)
-                    else:
-                        print('cannot find the mask or image:', imgpath, maskpath)
-        print('Found {} images in the folder {}'.format(len(img_paths), img_folder))
-        return img_paths, mask_paths
-
-    if split in ('train', 'val'):
-        img_folder = os.path.join(folder, 'leftImg8bit/' + split)
-        mask_folder = os.path.join(folder, 'gtFine/' + split)
-        img_paths, mask_paths = get_path_pairs(img_folder, mask_folder)
-        return img_paths, mask_paths
-    else:
-        assert split == 'trainval'
-        print('trainval set')
-        train_img_folder = os.path.join(folder, 'leftImg8bit/train')
-        train_mask_folder = os.path.join(folder, 'gtFine/train')
-        val_img_folder = os.path.join(folder, 'leftImg8bit/val')
-        val_mask_folder = os.path.join(folder, 'gtFine/val')
-        train_img_paths, train_mask_paths = get_path_pairs(train_img_folder, train_mask_folder)
-        val_img_paths, val_mask_paths = get_path_pairs(val_img_folder, val_mask_folder)
-        img_paths = train_img_paths + val_img_paths
-        mask_paths = train_mask_paths + val_mask_paths
-    return img_paths, mask_paths
 
 class COCOSegmentation(SegmentationDataset):
     """COCO Semantic Segmentation Dataset for VOC Pre-training.
@@ -428,18 +428,20 @@ class SA1B_Dataset(torch.utils.data.Dataset):
         class_to_idx (dict): Dict with items (class_name, class_index).
         imgs (list): List of (image path, class_index) tuples
     """
-    def __init__(self, root, split=None, labels=False, features=None, max=None):
+    def __init__(self, root, split=None, labels=False, features=None, max_samples=None, size_threshold=None):
         super().__init__()
         self.features = torch.load(features) if features is not None else None
         self.imgs = []
         for _, img_dir in enumerate(split):
             img_names = os.listdir(os.path.join(root, img_dir))
             self.imgs += [os.path.join(root, img_dir, img_name) for img_name in img_names if ".jpg" in img_name]
-        if max is not None:
-            self.imgs = self.imgs[:max]
+        if max_samples is not None:
+            self.imgs = self.imgs[:max_samples]
         self.labels = labels
         self.transform = None
         self.target_transform = None
+        self.STL, self.STH = size_threshold if size_threshold is not None else (None, None)
+        self.size_check = False
 
     CAT_LIST = []
     NUM_CLASS = 0
@@ -460,11 +462,14 @@ class SA1B_Dataset(torch.utils.data.Dataset):
             sample = self.transform(sample)
 
         target, features = None, None
+        self.size_check = False
         if self.labels:
             masks = json.load(open(f'{path[:-3]}json')) # load json masks
             target = np.zeros((masks['image']['height'], masks['image']['width']), dtype=np.uint8)
             for i, m in enumerate(masks['annotations'], 1):
-                target[mask_utils.decode(m['segmentation'])==1] = i
+                mask = mask_utils.decode(m['segmentation'])==1
+                self.check_size(mask)
+                target[mask] = i
             if self.target_transform is not None:
                 target = self.target_transform(target)
         features = np.load(self.imgs[index].replace(".jpg", ".npy")).squeeze()
@@ -476,6 +481,12 @@ class SA1B_Dataset(torch.utils.data.Dataset):
     
     def classes(self):
         return set()
+    
+    def check_size(self, mask):
+        if self.size_check or (self.STL is None) or (self.STH is None):
+            return
+        if self.STL <= np.mean(mask) <= self.STH:
+            self.size_check = True
     
     @property
     def num_class(self):

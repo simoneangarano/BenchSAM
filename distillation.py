@@ -27,7 +27,7 @@ def main():
                            features=None, labels=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=cfg['SHUFFLE'], num_workers=cfg['WORKERS'], pin_memory=False)
     test_dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=[cfg['SPLIT']], 
-                                features=None, labels=True, max=cfg['MAX_TEST'])
+                                features=None, labels=True, max_samples=cfg['MAX_TEST'])
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=cfg['WORKERS'], pin_memory=False)
 
     teacher = SamModel.from_pretrained("facebook/sam-vit-huge").to(cfg['DEVICE'])
@@ -78,10 +78,13 @@ def main():
         distiller.distill(name=f"{cfg['MODE']}_{cfg['EXP']}")
 
     test_dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=[cfg['SPLIT']], 
-                                features=None, labels=True, max=None)
+                                features=None, labels=True, max_samples=None)
     distiller.test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=cfg['WORKERS'], pin_memory=False)
+
+    cfg = json.load(open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'r'))
     cfg['IOU'], cfg['GT_IOU'] = distiller.validate(use_saved_features=cfg['LOAD_FEATURES'])
     json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'))
+
 
 
 if __name__ == "__main__":

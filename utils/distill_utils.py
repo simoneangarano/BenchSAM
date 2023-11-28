@@ -98,8 +98,7 @@ class DecDistiller(Distiller):
         self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW = cfg['LOSS_WEIGHTS']
         self.n_prompts = cfg['PROMPTS']
         self.random_prompt = cfg['RANDOM_PROMPT']
-        self.size_thr_low = cfg['SIZE_THR_LOW']
-        self.size_thr_high = cfg['SIZE_THR_HIGH']
+        self.size_thr_low, self.size_thr_high = cfg['SIZE_THRESHOLDS']
         self.pr = cProfile.Profile() if cfg['PROFILE'] else None
         self.best_iou = 0
 
@@ -128,8 +127,9 @@ class DecDistiller(Distiller):
         feats = feats.to(self.device) if use_saved_features else None
         self.get_features(img)
         prompts = self.get_prompts(label[0])
+        if prompts == []:
+            return False
         label = label.to(self.device)
-
         for prompt, c in prompts:
             t_mask, s_mask = self.get_masks(img, prompt, feats)
             if self.debug:
@@ -139,6 +139,7 @@ class DecDistiller(Distiller):
             loss = (self.FW * focal + self.BW * bce + self.IW * iou + self.DW * dice + self.GW * iou_gt)/(acc*len(prompts))
             loss.backward(retain_graph=True)
             self.update_metrics(loss*acc, focal/len(prompts), bce/len(prompts), iou/len(prompts), dice/len(prompts), iou_gt/len(prompts))
+        return True
 
     def distill(self, name=''):
         self.acc = self.cfg['BATCH_SIZE']
@@ -149,17 +150,21 @@ class DecDistiller(Distiller):
             self.set_trainable_weights()
             self.t = qqdm(self.dataloader, desc=format_str('bold', 'Distillation'))
             self.init_metrics()
-            for i, (img, label, _, feats) in enumerate(self.t):
-                self.step(img, label, feats, self.cfg['BATCH_SIZE'], self.cfg['LOAD_FEATURES'])
-                if (i+1) % self.cfg['BATCH_SIZE'] == 0 or i+1 == len(self.dataloader):
-                    self.print_metrics(i, self.cfg['BATCH_SIZE'])
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
+            i = 0
+            for img, label, _, feats in self.t:
+                check = self.step(img, label, feats, self.cfg['BATCH_SIZE'], self.cfg['LOAD_FEATURES'])
+                if check:
+                    if (i+1) % self.cfg['BATCH_SIZE'] == 0 or i+1 == len(self.dataloader):
+                        self.print_metrics(i+1, self.cfg['BATCH_SIZE'])
+                        self.optimizer.step()
+                        self.optimizer.zero_grad()
+                    i += 1
 
             miou, gtiou = self.validate(use_saved_features=self.cfg['LOAD_FEATURES'])
-            if miou > self.best_iou:
+            iou = gtiou if self.GW == 1 else miou
+            if iou > self.best_iou:
                 torch.save(self.student.model.state_dict(), f"bin/distilled_mobile_sam_{name}.pt")
-                self.best_iou = miou
+                self.best_iou = iou
             self.scheduler.step()
 
             if self.pr:
@@ -173,30 +178,35 @@ class DecDistiller(Distiller):
         with torch.no_grad():
             t = qqdm(self.test_dataloader, desc=format_str('bold', 'Validation'))
             r_bce, r_iou, r_loss, r_focal, r_dice, r_iougt = 0, 0, 0, 0, 0, 0
-            for i, (img, label, _, feats) in enumerate(t):
-                feats = feats.to(self.device) if use_saved_features else None
-                self.get_features(img)
-                prompt, c = self.get_prompt(label[0], seed=0)
-                label = label.to(self.device)
-
-                t_mask, s_mask = self.get_masks(img, prompt, feats)
-                if self.debug:
-                    t_mask_bin = (t_mask > 0.0)
-                    s_mask_bin = (s_mask > 0.0)
-                focal, bce, iou, dice, iou_gt = self.get_loss(t_mask, s_mask, label[0]==c)
-                loss = self.FW * focal + self.BW * bce + self.IW * iou + self.DW * dice + self.GW * iou_gt
-                iou, iou_gt = self.get_metrics(t_mask, s_mask, label[0]==c)
-                if self.debug:
-                    print(f"mIoU: {iou:.2e}")
-                r_loss += loss.item()
-                r_focal += focal.item()
-                r_bce += bce.item()
-                r_dice += dice.item()
-                r_iou += iou
-                r_iougt += iou_gt
-                t.set_infos({'Loss':f'{r_loss/(i+1):.2e}', 'Focal':f'{r_focal/(i+1):.3f}', 'BCE':f'{r_bce/(i+1):.3f}', 
-                             'Dice':f'{r_dice/(i+1):.3f}', 'mIoU':f'{r_iou/(i+1):.3f}', 'mIoUgt':f'{r_iougt/(i+1):.3f}'})
-            return r_iou / len(self.test_dataloader), r_iougt / len(self.test_dataloader)
+            i = 0
+            for img, label, _, feats in t:
+                    feats = feats.to(self.device) if use_saved_features else None
+                    self.get_features(img)
+                    prompt, c = self.get_prompt(label[0], seed=self.cfg['SEED'])
+                    if prompt is None:
+                        continue
+                    label = label.to(self.device)
+                    t_mask, s_mask = self.get_masks(img, prompt, feats)
+                    if self.debug:
+                        t_mask_bin = (t_mask > 0.0)
+                        s_mask_bin = (s_mask > 0.0)
+                    focal, bce, iou, dice, iou_gt = self.get_loss(t_mask, s_mask, label[0]==c)
+                    loss = self.FW * focal + self.BW * bce + self.IW * iou + self.DW * dice + self.GW * iou_gt
+                    if self.cfg['MODEL'] == 'sam':
+                        s_mask = t_mask
+                    iou, iou_gt = self.get_metrics(t_mask, s_mask, label[0]==c)
+                    if self.debug:
+                        print(f"mIoU: {iou:.2e}")
+                    r_loss += loss.item()
+                    r_focal += focal.item()
+                    r_bce += bce.item()
+                    r_dice += dice.item()
+                    r_iou += iou
+                    r_iougt += iou_gt
+                    t.set_infos({'Loss':f'{r_loss/(i+1):.2e}', 'Focal':f'{r_focal/(i+1):.3f}', 'BCE':f'{r_bce/(i+1):.3f}', 
+                                'Dice':f'{r_dice/(i+1):.3f}', 'mIoU':f'{r_iou/(i+1):.3f}', 'mIoUgt':f'{r_iougt/(i+1):.3f}'})
+                    i += 1
+            return r_iou / (i+1), r_iougt / (i+1)
                 
     def get_loss(self, t_mask, s_mask, label):
         t_mask_bin = (t_mask > 0.0)
@@ -229,8 +239,9 @@ class DecDistiller(Distiller):
             for point_w in range(self.n_prompts):
                 crop = label[point_h*margin_h : (point_h+1)*margin_h, point_w*margin_w : (point_w+1)*margin_w]
                 local_prompt, c = self.get_prompt(crop, seed=seed)
-                prompt = [[local_prompt[0][0][0] + point_w * margin_w, local_prompt[0][0][1] + point_h * margin_h]]
-                prompts.append(([prompt], c))
+                if local_prompt is not None:
+                    prompt = [[local_prompt[0][0][0] + point_w * margin_w, local_prompt[0][0][1] + point_h * margin_h]]
+                    prompts.append(([prompt], c))
         return prompts
     
     def get_prompt(self, label, seed=None):
@@ -240,14 +251,12 @@ class DecDistiller(Distiller):
             label[e] = 0
         C, counts = np.unique(label.cpu(), return_counts=True)
         counts = (counts / counts.sum())[1:]
-        Cf = C[1:][(counts > self.size_thr_low) * (counts < self.size_thr_high)]
-        # C = C[1:] if C[0] == 0 else C
-        if len(Cf) == 0:
-            Cf = C[1:][counts > self.size_thr_low]
-        # else:
+        C = C[1:][(counts >= self.size_thr_low) * (counts <= self.size_thr_high)]
+        if len(C) == 0:
+            return None, None
         if seed is not None:
             np.random.seed(seed)
-        c = np.random.choice(Cf)
+        c = np.random.choice(C)
 
         x_v, y_v = np.where(label.cpu() == c)
         if self.random_prompt:
@@ -273,9 +282,9 @@ class DecDistiller(Distiller):
         self.r_iougt += iou_gt.item()
 
     def print_metrics(self, i, acc):
-        self.t.set_infos({'Loss':f'{self.r_loss/(i+1):.2e}', 'Focal':f'{self.r_focal/(i+1):.2e}', 
-                          'BCE':f'{self.r_bce/(i+1):.1e}', 'Dice':f'{self.r_dice/(i+1):.3f}', 
-                          'IoU':f'{self.r_iou/(i+1):.3f}', 'IoU_gt':f'{self.r_iougt/(i+1):.3f}'}) 
+        self.t.set_infos({'Loss':f'{self.r_loss/(i):.2e}', 'Focal':f'{self.r_focal/(i):.2e}', 
+                          'BCE':f'{self.r_bce/(i):.1e}', 'Dice':f'{self.r_dice/(i):.3f}', 
+                          'IoU':f'{self.r_iou/(i):.3f}', 'IoU_gt':f'{self.r_iougt/(i):.3f}'}) 
     
     def set_trainable_weights(self, train=True):
         if train:
