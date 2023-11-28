@@ -5,6 +5,7 @@ CKPT: 'bin/mobile_sam.pt' # 'bin/mobile_sam.pt'
 EXP: 'prompt'
 PROFILE: False
 DEBUG: False
+TEST: False
 
 # DATA
 DATA_DIR: '../Datasets/'
@@ -12,12 +13,12 @@ SPLIT: 'sa_000020'
 TRAIN_SPLITS: 1
 MAX_TEST: 2500
 BATCH_SIZE: 16
-NUM_WORKERS: 8
+WORKERS: 8
 SHUFFLE: True
 LOAD_FEATURES: True
 
 # PROMPTS
-N_PROMPTS: 1
+PROMPTS: 1
 RANDOM_PROMPT: False
 EDGE_FILTER: False
 SIZE_THR_LOW: 1.e-4 # 0

@@ -1,11 +1,11 @@
-import argparse, random, warnings
+import random, warnings
 from pathlib import Path
 from tqdm import tqdm
-import gc
+import gc, yaml
 
 import numpy as np
 import pandas as pd
-import cv2, json, yaml
+import cv2
 
 import torch
 from pycocotools import mask as maskUtils
@@ -17,54 +17,6 @@ from utils.utils import get_mask_limits
 
 warnings.simplefilter('ignore', FutureWarning)
 gc.collect()
-
-
-
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='../Datasets/')
-    parser.add_argument('--model_dir', type=str, default='bin/')
-    parser.add_argument('--output_dir', type=str, default='results/')
-
-    parser.add_argument('--dataset', type=str, default='sa1b', choices=['coco', 'cityscapes', 'sa1b'])
-    parser.add_argument('--split', type=str, default='val', choices=['train', 'val'])
-    parser.add_argument('--crop_size', type=int, default=0)
-    parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_workers', type=int, default=8)
-    parser.add_argument('--pin_memory', type=bool, default=False)
-    parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--cuda', type=int, default=0)
-
-    parser.add_argument('--model', type=str, default='MobileSAM', choices=['SAM', 'MobileSAM', 'FastSAM'])
-    parser.add_argument('--weights', type=str, default=None)
-    parser.add_argument('--sparsity', type=int, default=0)
-    parser.add_argument('--pruning_method', type=str, default='none', choices=['l1norm', 'sparsegpt', 'none'])
-    parser.add_argument('--size_embed', type=str, default='none', choices=['none', 'sparse', 'dense'])
-
-    # Deprecated
-    # parser.add_argument('--imsize', type=int, default=1024)
-    # parser.add_argument('--retina', type=bool, default=True)
-    # parser.add_argument('--conf_thr', type=float, default=0.25)
-    # parser.add_argument('--iou_thr', type=float, default=0.0)
-    # parser.add_argument('--center_prompt', type=bool, default=False) # if True, the prompt is the centroid of the instance mask
-    
-    parser.add_argument('--random_prompt', type=bool, default=False) # if True, the prompt is a random point of the instance mask
-    parser.add_argument('--class_thr', type=float, default=0.05) # ignores classes with less than 5% of the instance mask
-    parser.add_argument('--size_thr', type=float, default=1e-4)
-    parser.add_argument('--edge_filter', type=bool, default=False) # removes edges from the instance mask before computing the prompt
-    parser.add_argument('--edge_width', type=int, default=5) # width of the border to remove
-    parser.add_argument('--refeed', type=bool, default=False) # if True, the mask is re-fed to the model to refine the prediction
-    parser.add_argument('--sigmoid', type=bool, default=False) # if True, the output is passed through a sigmoid function
-
-    parser.add_argument('--crop_mask', type=bool, default=False) # if True, the mask is cropped to the instance limits
-    parser.add_argument('--rle_encoding', type=bool, default=True) # if True, the mask is encoded in RLE format
-    parser.add_argument('--save_results', type=bool, default=True)
-    parser.add_argument('--experiment', type=str, default='')
-    parser.add_argument('--suffix', type=str, default='')
-
-    args = parser.parse_args()
-    # print('\n'.join(f"{k}={v}" for k, v in vars(args).items()))
-    return args
 
 
 
@@ -121,7 +73,7 @@ class SinglePointInferenceEngine:
             weights = self.cfg['CKPT'] if self.cfg['CKPT'] is not None else "mobile_sam.pt"
             print(f"Loading MobileSAM model {weights}")
             sam_checkpoint = self.model_dir.joinpath(weights)
-            predictor = sam_model_registry['vit_t'](checkpoint=sam_checkpoint, size_embedding=self.cfg['SIZE_EMBED']).to(self.device).eval()
+            predictor = sam_model_registry['vit_t'](checkpoint=sam_checkpoint, add_prompt=self.cfg['SIZE_EMBED']).to(self.device).eval()
             self.model = SamPredictor(predictor)
         elif self.cfg['MODEL'] == 'FastSAM':
             print('Loading FastSAM model...')
@@ -179,19 +131,18 @@ class SinglePointInferenceEngine:
             return [[prompt.values[0][0]]], label[prompt.values[0][0][1],prompt.values[0][0][0]]
             
         # Otherwise, generate a new prompt
-        if self.cfg['EDGE_WIDTH']:
+        if self.cfg['EDGE_FILTER']:
             e = cv2.Canny(image=label.numpy().astype(np.uint8), threshold1=10, threshold2=50)
             e = cv2.dilate(e, np.ones((self.cfg['EDGE_WIDTH'], self.cfg['EDGE_WIDTH']), np.uint8), iterations=1).astype(bool)
             label[e] = 0
 
         C, counts = np.unique(label.cpu(), return_counts=True)
         counts = (counts / counts.sum())[1:]
-        C = C[1:][counts > self.cfg['SIZE_THR']]
-        if len(C) == 0:
-            print('No class found')
-            c = 0
-        else:
-            c = np.random.choice(C)
+        Cf = C[1:][(counts > self.size_thr_low) * (counts < self.size_thr_high)]
+        if len(Cf) == 0:
+            Cf = C[1:][counts > self.size_thr_low]
+        c = np.random.choice(Cf)
+
         x_v, y_v = np.where(label == c)
         if self.cfg['RANDOM_PROMPT']:
             r = random.randint(0, len(x_v) - 1)
@@ -254,7 +205,6 @@ class SinglePointInferenceEngine:
 
 
 def main():
-    #args = get_args()
     with open('config_inference.yaml', 'r') as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
     torch.manual_seed(cfg['SEED'])

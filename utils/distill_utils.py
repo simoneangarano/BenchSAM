@@ -96,7 +96,7 @@ class DecDistiller(Distiller):
         self.iou_loss = IoULoss().to(self.device)
         self.bound_loss = BoundaryLoss().to(self.device)
         self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW = cfg['LOSS_WEIGHTS']
-        self.n_prompts = cfg['N_PROMPTS']
+        self.n_prompts = cfg['PROMPTS']
         self.random_prompt = cfg['RANDOM_PROMPT']
         self.size_thr_low = cfg['SIZE_THR_LOW']
         self.size_thr_high = cfg['SIZE_THR_HIGH']
@@ -155,9 +155,8 @@ class DecDistiller(Distiller):
                     self.print_metrics(i, self.cfg['BATCH_SIZE'])
                     self.optimizer.step()
                     self.optimizer.zero_grad()
-                    torch.save(self.student.model.state_dict(), f"bin/distilled_mobile_sam_{name}.pt")
 
-            miou = self.validate(use_saved_features=self.cfg['LOAD_FEATURES'])
+            miou, gtiou = self.validate(use_saved_features=self.cfg['LOAD_FEATURES'])
             if miou > self.best_iou:
                 torch.save(self.student.model.state_dict(), f"bin/distilled_mobile_sam_{name}.pt")
                 self.best_iou = miou
@@ -197,7 +196,7 @@ class DecDistiller(Distiller):
                 r_iougt += iou_gt
                 t.set_infos({'Loss':f'{r_loss/(i+1):.2e}', 'Focal':f'{r_focal/(i+1):.3f}', 'BCE':f'{r_bce/(i+1):.3f}', 
                              'Dice':f'{r_dice/(i+1):.3f}', 'mIoU':f'{r_iou/(i+1):.3f}', 'mIoUgt':f'{r_iougt/(i+1):.3f}'})
-            return r_iou / len(self.test_dataloader)
+            return r_iou / len(self.test_dataloader), r_iougt / len(self.test_dataloader)
                 
     def get_loss(self, t_mask, s_mask, label):
         t_mask_bin = (t_mask > 0.0)

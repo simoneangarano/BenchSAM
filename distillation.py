@@ -25,10 +25,10 @@ def main():
 
     dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=["sa_00000" + str(i) for i in range(cfg['TRAIN_SPLITS'])],
                            features=None, labels=True)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=cfg['SHUFFLE'], num_workers=cfg['NUM_WORKERS'], pin_memory=False)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=cfg['SHUFFLE'], num_workers=cfg['WORKERS'], pin_memory=False)
     test_dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=[cfg['SPLIT']], 
                                 features=None, labels=True, max=cfg['MAX_TEST'])
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=cfg['NUM_WORKERS'], pin_memory=False)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=cfg['WORKERS'], pin_memory=False)
 
     teacher = SamModel.from_pretrained("facebook/sam-vit-huge").to(cfg['DEVICE'])
     teacher.eval()
@@ -72,9 +72,16 @@ def main():
     
     if cfg['MODE'] == 'save_features':
         distiller.save_teacher_features(Path('results/teacher_features.pt'))
+    elif cfg['TEST']:
+        pass
     else:
         distiller.distill(name=f"{cfg['MODE']}_{cfg['EXP']}")
 
+    test_dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=[cfg['SPLIT']], 
+                                features=None, labels=True, max=None)
+    distiller.test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=cfg['WORKERS'], pin_memory=False)
+    cfg['IOU'], cfg['GT_IOU'] = distiller.validate(use_saved_features=cfg['LOAD_FEATURES'])
+    json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'))
 
 
 if __name__ == "__main__":

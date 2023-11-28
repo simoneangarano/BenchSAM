@@ -1,7 +1,7 @@
 # GENERAL
-GPU: 1
+GPU: 7
 EXP: 'center_'
-SUFFIX: '_iou_lr'
+SUFFIX: '_prompt'
 SAVE_RESULTS: True
 PROFILE: False
 DEBUG: False
@@ -23,16 +23,17 @@ SHUFFLE: False
 
 # MODEL
 MODEL: 'MobileSAM' # SAM, MobileSAM, FastSAM
-CKPT: "distilled_mobile_sam_decoder_iou_lr.pt" # "mobile_sam.pt"
+CKPT: "distilled_mobile_sam_prompt_prompt.pt" # "mobile_sam.pt"
 SPARSITY: 0
 PRUNING_METHOD: 'none' # l1norm, sparsegpt, none
-SIZE_EMBED: 'none' # sparse, dense
+SIZE_EMBED: 'random' # null, size, random
 
 # PROMPTS
 N_PROMPTS: 1
 RANDOM_PROMPT: False
 EDGE_FILTER: False
-SIZE_THR: 1.e-4
+SIZE_THR_LOW: 1.e-4
+SIZE_THR_HIGH: 5.e-4
 CLASS_THR: 0.05
 EDGE_WIDTH: 5
 REFEED: False
