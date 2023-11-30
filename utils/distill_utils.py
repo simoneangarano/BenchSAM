@@ -1,7 +1,7 @@
 from pathlib import Path
 import cProfile, pstats, io
 import random
-import csv
+import csv, json
 from qqdm import qqdm, format_str
 import pandas as pd
 import cv2
@@ -165,6 +165,8 @@ class DecDistiller(Distiller):
             if iou > self.best_iou:
                 torch.save(self.student.model.state_dict(), f"bin/distilled_mobile_sam_{name}.pt")
                 self.best_iou = iou
+
+            self.save_metrics(miou, gtiou, i)
             self.scheduler.step()
 
             if self.pr:
@@ -207,29 +209,6 @@ class DecDistiller(Distiller):
                                 'Dice':f'{r_dice/(i+1):.3f}', 'mIoU':f'{r_iou/(i+1):.3f}', 'mIoUgt':f'{r_iougt/(i+1):.3f}'})
                     i += 1
             return r_iou / (i+1), r_iougt / (i+1)
-                
-    def get_loss(self, t_mask, s_mask, label):
-        t_mask_bin = (t_mask > 0.0)
-        focal = self.focal_loss(s_mask, t_mask_bin.float())
-        bce = self.bce_loss(s_mask, t_mask_bin.float())
-        iou = self.iou_loss(s_mask, t_mask_bin.int())
-        dice = self.dice_loss(s_mask, t_mask_bin.int())
-        #bce_gt = self.bce_loss(s_mask, label.float())
-        iou_gt = self.iou_loss(s_mask, label.int())
-        #bound = self.bound_loss(s_mask, label.int())
-        if self.debug:
-            print(f"BCE: {bce.item():.2e} IoU: {iou.item():.2e} Focal: {focal.item():.2e} Dice: {dice.item():.2e}")
-            print(f"IoU_gt: {iou_gt.item():.2e}")
-
-        return focal, bce, iou, dice, iou_gt
-    
-    def get_metrics(self, t_mask, s_mask, label):
-        t_mask_bin = (t_mask > 0.0)
-        # focal = focal_metric(s_mask, t_mask_bin.float())
-        # bce = bce_metric(s_mask, t_mask_bin.float())
-        iou = iou_metric(s_mask, t_mask_bin.int())
-        iou_gt = iou_metric(s_mask, label.int())
-        return iou, iou_gt
 
     def get_prompts(self, label, seed=None):
         h, w = label.shape
@@ -269,6 +248,29 @@ class DecDistiller(Distiller):
             x, y = int(x), int(y)
 
         return [[[y,x]]], c # inverted to compensate different indexing
+    
+    def get_loss(self, t_mask, s_mask, label):
+        t_mask_bin = (t_mask > 0.0)
+        focal = self.focal_loss(s_mask, t_mask_bin.float())
+        bce = self.bce_loss(s_mask, t_mask_bin.float())
+        iou = self.iou_loss(s_mask, t_mask_bin.int())
+        dice = self.dice_loss(s_mask, t_mask_bin.int())
+        #bce_gt = self.bce_loss(s_mask, label.float())
+        iou_gt = self.iou_loss(s_mask, label.int())
+        #bound = self.bound_loss(s_mask, label.int())
+        if self.debug:
+            print(f"BCE: {bce.item():.2e} IoU: {iou.item():.2e} Focal: {focal.item():.2e} Dice: {dice.item():.2e}")
+            print(f"IoU_gt: {iou_gt.item():.2e}")
+
+        return focal, bce, iou, dice, iou_gt
+    
+    def get_metrics(self, t_mask, s_mask, label):
+        t_mask_bin = (t_mask > 0.0)
+        # focal = focal_metric(s_mask, t_mask_bin.float())
+        # bce = bce_metric(s_mask, t_mask_bin.float())
+        iou = iou_metric(s_mask, t_mask_bin.int())
+        iou_gt = iou_metric(s_mask, label.int())
+        return iou, iou_gt
 
     def init_metrics(self):
         self.r_focal, self.r_bce, self.r_iou, self.r_loss, self.r_dice, self.r_iougt = 0, 0, 0, 0, 0, 0
@@ -285,6 +287,15 @@ class DecDistiller(Distiller):
         self.t.set_infos({'Loss':f'{self.r_loss/(i):.2e}', 'Focal':f'{self.r_focal/(i):.2e}', 
                           'BCE':f'{self.r_bce/(i):.1e}', 'Dice':f'{self.r_dice/(i):.3f}', 
                           'IoU':f'{self.r_iou/(i):.3f}', 'IoU_gt':f'{self.r_iougt/(i):.3f}'}) 
+        
+    def save_metrics(self, miou, gtiou, i):
+        cfg = json.load(open( f"bin/configs/{self.cfg['MODE']}_{self.cfg['EXP']}.json",'r'))
+        cfg['TRAIN']['IOU'].append(self.r_iou/(i))
+        cfg['TRAIN']['GT_IOU'].append(self.r_iougt/(i))
+        cfg['TRAIN']['LOSS'].append(self.r_loss/(i))
+        cfg['VAL']['IOU'].append(miou)
+        cfg['VAL']['GT_IOU'].append(gtiou)
+        json.dump(cfg, open( f"bin/configs/{self.cfg['MODE']}_{self.cfg['EXP']}.json",'w'), indent=2)
     
     def set_trainable_weights(self, train=True):
         if train:

@@ -18,7 +18,7 @@ from utils.distill_utils import *
 def main():
     with open('config_distillation.yaml', 'r') as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
-    json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'))
+    json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'), indent=2)
     cfg['DATA_DIR'] = Path(cfg['DATA_DIR'])
     cfg['DEVICE'] = torch.device(f"cuda:{cfg['GPU']}" if torch.cuda.is_available() else "cpu")
     cfg['PRETRAINED'] = True if cfg['MODE'] in ['decoder', 'prompt'] else False
@@ -52,7 +52,7 @@ def main():
         params = list(student.model.mask_decoder.parameters()) + list(student.model.prompt_encoder.parameters())
     elif cfg['MODE'] == 'prompt':
         DISTILLER = DecDistiller
-        params = student.model.prompt_encoder.point_embeddings[4].parameters()
+        params = student.model.prompt_encoder.point_embeddings[4].parameters() if not cfg['TEST'] else student.model.prompt_encoder.point_embeddings.parameters()
     else:
         raise ValueError(f"Invalid mode: {cfg['MODE']}")
 
@@ -83,7 +83,7 @@ def main():
 
     cfg = json.load(open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'r'))
     cfg['IOU'], cfg['GT_IOU'] = distiller.validate(use_saved_features=cfg['LOAD_FEATURES'])
-    json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'))
+    json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'), indent=2)
 
 
 
