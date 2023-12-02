@@ -51,8 +51,10 @@ class PromptEncoder(nn.Module):
         point_embeddings = [nn.Embedding(1, embed_dim) for _ in range(self.num_point_embeddings)]
         if self.add_prompt == 'size':
             point_embeddings.append(nn.Embedding(len(self.DELIMITERS)+1, embed_dim))
-        elif self.add_prompt == 'random':
+        elif self.add_prompt in ['random', 'zero']:
             point_embeddings.append(nn.Embedding(1, embed_dim))
+            if self.add_prompt == 'zero':
+                point_embeddings[-1].weight.data.fill_(0)
         self.point_embeddings = nn.ModuleList(point_embeddings)
         self.not_a_point_embed = nn.Embedding(1, embed_dim)
 
@@ -183,7 +185,7 @@ class PromptEncoder(nn.Module):
         if self.add_prompt == 'size':
             size_embedding = self._embed_size(size).unsqueeze(0)
             sparse_embeddings = torch.cat([sparse_embeddings, size_embedding], dim=1)
-        elif self.add_prompt == 'random':
+        elif self.add_prompt in ['random', 'zero']:
             size_embedding = self.point_embeddings[4](torch.tensor(0, device=self._get_device()))[None,None,...]
             sparse_embeddings = torch.cat([sparse_embeddings, size_embedding], dim=1)
 

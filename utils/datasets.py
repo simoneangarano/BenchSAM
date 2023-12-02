@@ -468,7 +468,7 @@ class SA1B_Dataset(torch.utils.data.Dataset):
             target = np.zeros((masks['image']['height'], masks['image']['width']), dtype=np.uint8)
             for i, m in enumerate(masks['annotations'], 1):
                 mask = mask_utils.decode(m['segmentation'])==1
-                self.check_size(mask)
+                # self.check_size(mask)
                 target[mask] = i
             if self.target_transform is not None:
                 target = self.target_transform(target)

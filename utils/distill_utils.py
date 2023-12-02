@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
+import pycocotools.mask as maskUtils
 from utils import misc
 
 
@@ -175,40 +176,75 @@ class DecDistiller(Distiller):
                 ps.dump_stats('results/profile.prof')
                 ps.print_stats(.1)
 
-    def validate(self, use_saved_features=False):
+    def validate(self, use_saved_features=False, save=False):
         self.set_trainable_weights(train=False)
         with torch.no_grad():
             t = qqdm(self.test_dataloader, desc=format_str('bold', 'Validation'))
             r_bce, r_iou, r_loss, r_focal, r_dice, r_iougt = 0, 0, 0, 0, 0, 0
             i = 0
-            for img, label, _, feats in t:
-                    feats = feats.to(self.device) if use_saved_features else None
-                    self.get_features(img)
-                    prompt, c = self.get_prompt(label[0], seed=self.cfg['SEED'])
-                    if prompt is None:
-                        continue
-                    label = label.to(self.device)
-                    t_mask, s_mask = self.get_masks(img, prompt, feats)
-                    if self.debug:
-                        t_mask_bin = (t_mask > 0.0)
-                        s_mask_bin = (s_mask > 0.0)
-                    focal, bce, iou, dice, iou_gt = self.get_loss(t_mask, s_mask, label[0]==c)
-                    loss = self.FW * focal + self.BW * bce + self.IW * iou + self.DW * dice + self.GW * iou_gt
-                    if self.cfg['MODEL'] == 'sam':
-                        s_mask = t_mask
-                    iou, iou_gt = self.get_metrics(t_mask, s_mask, label[0]==c)
-                    if self.debug:
-                        print(f"mIoU: {iou:.2e}")
-                    r_loss += loss.item()
-                    r_focal += focal.item()
-                    r_bce += bce.item()
-                    r_dice += dice.item()
-                    r_iou += iou
-                    r_iougt += iou_gt
-                    t.set_infos({'Loss':f'{r_loss/(i+1):.2e}', 'Focal':f'{r_focal/(i+1):.3f}', 'BCE':f'{r_bce/(i+1):.3f}', 
-                                'Dice':f'{r_dice/(i+1):.3f}', 'mIoU':f'{r_iou/(i+1):.3f}', 'mIoUgt':f'{r_iougt/(i+1):.3f}'})
-                    i += 1
+            for img, label, name, feats in t:
+                feats = feats.to(self.device) if use_saved_features else None
+                self.get_features(img)
+                prompt, c = self.get_prompt(label[0], name=name[0], seed=self.cfg['SEED'])
+                if prompt is None:
+                    continue
+                label = label.to(self.device)
+                t_mask, s_mask = self.get_masks(img, prompt, feats)
+                if self.debug:
+                    t_mask_bin = (t_mask > 0.0)
+                    s_mask_bin = (s_mask > 0.0)
+                focal, bce, iou, dice, iou_gt = self.get_loss(t_mask, s_mask, label[0]==c)
+                loss = self.FW * focal + self.BW * bce + self.IW * iou + self.DW * dice + self.GW * iou_gt
+                if self.cfg['MODEL'] == 'sam':
+                    s_mask = t_mask
+                iou, iou_gt = self.get_metrics(t_mask, s_mask, label[0]==c)
+                if self.debug:
+                    print(f"mIoU: {iou:.2e}")
+                r_loss += loss.item()
+                r_focal += focal.item()
+                r_bce += bce.item()
+                r_dice += dice.item()
+                r_iou += iou
+                r_iougt += iou_gt
+                t.set_infos({'Loss':f'{r_loss/(i+1):.2e}', 'Focal':f'{r_focal/(i+1):.3f}', 'BCE':f'{r_bce/(i+1):.3f}', 
+                            'Dice':f'{r_dice/(i+1):.3f}', 'mIoU':f'{r_iou/(i+1):.3f}', 'mIoUgt':f'{r_iougt/(i+1):.3f}'})
+                
+                if save:
+                    self.names.append(name[0])
+                    self.shapes.append(list(img.shape[1:3]))
+                    self.points.append(prompt[0][0])
+                    self.masks.append(maskUtils.encode(np.asfortranarray(s_mask.detach().cpu()>0)) if self.cfg['RLE_ENCODING'] else s_mask)
+                    self.sizes.append((s_mask>0).float().mean().item())
+                    if self.prompts is None:
+                        self.gt_masks.append(maskUtils.encode(np.asfortranarray(label[0].detach().cpu()==c)) if self.cfg['RLE_ENCODING'] else label[0]==c)
+                        self.gt_sizes.append((label[0]==c).float().mean().item())
+                i += 1
             return r_iou / (i+1), r_iougt / (i+1)
+        
+    def save_outputs(self):
+        if self.cfg['PROMPT_DIR'].exists():
+            self.prompts = pd.read_pickle(self.cfg['PROMPT_DIR']) 
+            print(f"Prompts loaded from file {self.cfg['PROMPT_DIR']}") 
+        else:
+            self.prompts = None
+            print('Random Prompts') 
+
+        self.names, self.shapes, self.points, self.masks, self.gt_masks, self.sizes, self.gt_sizes = [], [], [], [], [], [], []
+        iou, iou_gt = self.validate(self.cfg['LOAD_FEATURES'], save=True)
+
+        if self.prompts is None:
+            self.prompts = pd.DataFrame({'name': self.names, 'shape': self.shapes, 'prompt': self.points, 
+                                         'mask': self.gt_masks, 'mask_size': self.gt_sizes})
+            self.prompts.to_pickle(self.cfg['PROMPT_DIR']) 
+            print(f"Prompts saved to file {self.cfg['PROMPT_DIR']}")
+        
+        df = pd.DataFrame({'name': self.names, 'shape': self.shapes, 'prompt': self.points,
+                           'mask': self.masks, 'mask_size': self.sizes})
+        out_file = self.cfg['OUTPUT_DIR'].joinpath(f"{self.cfg['MODEL']}_{self.cfg['EXP']}.pkl")
+        df.to_pickle(out_file)
+        print(f"Results saved! {out_file}")
+
+        return iou, iou_gt
 
     def get_prompts(self, label, seed=None):
         h, w = label.shape
@@ -223,7 +259,10 @@ class DecDistiller(Distiller):
                     prompts.append(([prompt], c))
         return prompts
     
-    def get_prompt(self, label, seed=None):
+    def get_prompt(self, label, name=None, seed=None):
+        if self.prompts is not None:
+            prompt = self.prompts[self.prompts['name']==name][['prompt', 'class']]
+            return [[prompt.values[0][0]]], label[prompt.values[0][0][1],prompt.values[0][0][0]]
         if self.edge_filter:
             e = cv2.Canny(image=label.cpu().numpy().astype(np.uint8), threshold1=10, threshold2=50)
             e = cv2.dilate(e, np.ones((self.edge_width, self.edge_width), np.uint8), iterations = 1).astype(bool)
@@ -238,14 +277,16 @@ class DecDistiller(Distiller):
         c = np.random.choice(C)
 
         x_v, y_v = np.where(label.cpu() == c)
-        if self.random_prompt:
-            if seed is not None:
-                random.seed(seed)
-            r = random.randint(0, len(x_v) - 1)
-            x, y = x_v[r], y_v[r]
-        else: # central prompt
+        if not self.random_prompt: # central prompt
             x, y = x_v.mean(), y_v.mean()
             x, y = int(x), int(y)
+            if x in x_v and y in y_v:
+                return [[[y,x]]], c # inverted to compensate different indexing
+        # if central prompt is outside the mask due to concavity/holes, random prompt
+        if seed is not None:
+            random.seed(seed)
+        r = random.randint(0, len(x_v) - 1)
+        x, y = x_v[r], y_v[r]
 
         return [[[y,x]]], c # inverted to compensate different indexing
     

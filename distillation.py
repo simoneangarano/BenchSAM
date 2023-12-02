@@ -16,25 +16,31 @@ from utils.distill_utils import *
 
 
 def main():
+
     with open('config_distillation.yaml', 'r') as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
-    json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'), indent=2)
+    out_file = f"{cfg['MODEL_DIR']}/configs/{cfg['MODE']}_{cfg['EXP']}.json"
+    json.dump(cfg, open(out_file,'w'), indent=2)
     cfg['DATA_DIR'] = Path(cfg['DATA_DIR'])
+    cfg['OUTPUT_DIR'] = Path(cfg['OUTPUT_DIR'])
+    cfg['MODEL_DIR'] = Path(cfg['MODEL_DIR'])
+    cfg['PROMPT_DIR'] = cfg['OUTPUT_DIR'].joinpath(f"{cfg['EXP']}_prompts.pkl")
     cfg['DEVICE'] = torch.device(f"cuda:{cfg['GPU']}" if torch.cuda.is_available() else "cpu")
     cfg['PRETRAINED'] = True if cfg['MODE'] in ['decoder', 'prompt'] else False
 
-    dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=["sa_00000" + str(i) for i in range(cfg['TRAIN_SPLITS'])],
+    # DATASET
+    dataset = SA1B_Dataset(root=cfg['DATA_DIR'], split=["sa_00000" + str(i) for i in range(cfg['TRAIN_SPLITS'])],
                            features=None, labels=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=cfg['SHUFFLE'], num_workers=cfg['WORKERS'], pin_memory=False)
-    test_dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=[cfg['SPLIT']], 
+    test_dataset = SA1B_Dataset(root=cfg['DATA_DIR'], split=[cfg['SPLIT']], 
                                 features=None, labels=True, max_samples=cfg['MAX_TEST'])
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=cfg['WORKERS'], pin_memory=False)
 
+    # MODEL
     teacher = SamModel.from_pretrained("facebook/sam-vit-huge").to(cfg['DEVICE'])
     teacher.eval()
     processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
-
-    sam_checkpoint = cfg['CKPT'] if cfg['PRETRAINED'] else None
+    sam_checkpoint = cfg['MODEL_DIR'].joinpath(cfg['CKPT']) if cfg['PRETRAINED'] else None
     model = sam_model_registry["vit_t"](checkpoint=sam_checkpoint, add_prompt=cfg['ADD_PROMPT']).to(cfg['DEVICE'])
     model.eval()
     for m in model.image_encoder.modules():
@@ -44,6 +50,7 @@ def main():
             m.bias.requires_grad_(False)
     student = SamPredictor(model)
 
+    # DISTILLER
     if cfg['MODE'] == 'encoder':
         DISTILLER = EncDistiller
         params = student.model.image_encoder.parameters()
@@ -52,15 +59,16 @@ def main():
         params = list(student.model.mask_decoder.parameters()) + list(student.model.prompt_encoder.parameters())
     elif cfg['MODE'] == 'prompt':
         DISTILLER = DecDistiller
-        params = student.model.prompt_encoder.point_embeddings[4].parameters() if not cfg['TEST'] else student.model.prompt_encoder.point_embeddings.parameters()
+        module = student.model.prompt_encoder.point_embeddings
+        params = module[4].parameters() if not cfg['TEST'] else module.parameters()
     else:
         raise ValueError(f"Invalid mode: {cfg['MODE']}")
 
+    # OPTIMIZER
     if cfg['OPTIM'] == 'adamw':
         optimizer = torch.optim.AdamW(params, lr=cfg['LR'], weight_decay=cfg['WD'])
     elif cfg['OPTIM'] == 'adam':
         optimizer = torch.optim.Adam(params, lr=cfg['LR'])
-
     if cfg['SCHEDULER'] == 'exp':
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=cfg['DECAY'])
     elif cfg['SCHEDULER'] == 'cos':
@@ -68,22 +76,27 @@ def main():
     elif cfg['SCHEDULER'] == 'none':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=1.0)
 
+    # DISTILLATION
     distiller = DISTILLER(teacher, student, processor, dataloader, test_dataloader, optimizer, scheduler, cfg)
     
     if cfg['MODE'] == 'save_features':
-        distiller.save_teacher_features(Path('results/teacher_features.pt'))
+        distiller.save_teacher_features(cfg['OUTPUT_DIR'].joinpath('sam_features.pt'))
     elif cfg['TEST']:
         pass
     else:
         distiller.distill(name=f"{cfg['MODE']}_{cfg['EXP']}")
 
-    test_dataset = SA1B_Dataset(root=cfg['DATA_DIR'].joinpath('SA_1B/images/'), split=[cfg['SPLIT']], 
-                                features=None, labels=True, max_samples=None)
+    # TEST
+    test_dataset = SA1B_Dataset(root=cfg['DATA_DIR'], split=[cfg['SPLIT']], features=None, labels=True, max_samples=None)
     distiller.test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=cfg['WORKERS'], pin_memory=False)
 
-    cfg = json.load(open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'r'))
-    cfg['IOU'], cfg['GT_IOU'] = distiller.validate(use_saved_features=cfg['LOAD_FEATURES'])
-    json.dump(cfg, open( f"bin/configs/{cfg['MODE']}_{cfg['EXP']}.json",'w'), indent=2)
+    # SAVE RESULTS
+    cfg = json.load(open(out_file,'r'))
+    if cfg['SAVE_OUTPUTS']:
+        cfg['IOU'], cfg['GT_IOU'] = distiller.save_outputs()
+    else:
+        cfg['IOU'], cfg['GT_IOU'] = distiller.validate(use_saved_features=cfg['LOAD_FEATURES'])
+    json.dump(cfg, open(out_file,'w'), indent=2)
 
 
 

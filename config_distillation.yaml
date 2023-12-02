@@ -7,15 +7,19 @@ DEBUG: False
 # IMPORTANT
 MODE: 'prompt' # encoder, decoder, prompt, save_features
 MODEL: 'mobile_sam' # mobile_sam, mobile_sam_prompt
-CKPT: 'bin/mobile_sam.pt' # 'bin/mobile_sam.pt'
-EXP: ''
-TEST: False
+CKPT: 'mobile_sam.pt' # 'mobile_sam.pt'
+EXP: 'save'
+TEST: True
 SIZE_THRESHOLDS: [1.e-4, 5.e-4] # (0, 1)
 LOSS_WEIGHTS: [0,0,0,0,0,0,1] # self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW 
-ADD_PROMPT: 'random' # size, random
+ADD_PROMPT: 'zero' # size, random, zero
+
+# PATHS
+DATA_DIR: '../Datasets/SA_1B/images/'
+OUTPUT_DIR: 'results/'
+MODEL_DIR: 'bin/'
 
 # DATA
-DATA_DIR: '../Datasets/'
 SPLIT: 'sa_000020'
 TRAIN_SPLITS: 1
 MAX_TEST: 2500
@@ -23,6 +27,7 @@ BATCH_SIZE: 16
 WORKERS: 8
 SHUFFLE: True
 LOAD_FEATURES: True
+RLE_ENCODING: True
 
 # PROMPTS
 PROMPTS: 1
@@ -38,6 +43,7 @@ DECAY: 1.0
 WD: 1.e-5
 
 # METRICS
+SAVE_OUTPUTS: True
 TRAIN:
   LOSS: []
   IOU: []
