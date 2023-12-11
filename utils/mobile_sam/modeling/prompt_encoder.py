@@ -42,7 +42,7 @@ class PromptEncoder(nn.Module):
         self.embed_dim = embed_dim
         self.input_image_size = input_image_size
         self.image_embedding_size = image_embedding_size
-        self.add_prompt = add_prompt            
+        self.add_prompt = add_prompt
         self.pe_layer = PositionEmbeddingRandom(embed_dim // 2)
         self.DELIMITERS = [5e-4, 8e-4, 1e-3, 2e-3, 3e-3, 5e-3, 9e-3, 2e-2, 9e-2]
         self.CLASSES = list(range(len(self.DELIMITERS)+1))

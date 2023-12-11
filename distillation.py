@@ -1,13 +1,13 @@
+import sys
+sys.path.append('..')
 from pathlib import Path
-import yaml
-import json
+import yaml, json
 
 import torch
 from transformers import (SamModel, SamProcessor)
-from utils.mobile_sam import sam_model_registry
+from minlora import add_lora, get_lora_params
 
-import sys
-sys.path.append('..')
+from utils.mobile_sam import sam_model_registry
 from utils.mobile_sam.predictor import SamPredictor
 from utils.datasets import SA1B_Dataset
 from utils.utils import *
@@ -24,9 +24,9 @@ def main():
     cfg['DATA_DIR'] = Path(cfg['DATA_DIR'])
     cfg['OUTPUT_DIR'] = Path(cfg['OUTPUT_DIR'])
     cfg['MODEL_DIR'] = Path(cfg['MODEL_DIR'])
-    cfg['PROMPT_DIR'] = cfg['OUTPUT_DIR'].joinpath(f"{cfg['EXP']}_prompts.pkl")
+    cfg['PROMPT_DIR'] = cfg['OUTPUT_DIR'].joinpath(f"prompts.pkl")
     cfg['DEVICE'] = torch.device(f"cuda:{cfg['GPU']}" if torch.cuda.is_available() else "cpu")
-    cfg['PRETRAINED'] = True if cfg['MODE'] in ['decoder', 'prompt'] else False
+    cfg['PRETRAINED'] = True if cfg['MODE'] in ['decoder', 'prompt', 'lora'] else False
 
     # DATASET
     dataset = SA1B_Dataset(root=cfg['DATA_DIR'], split=["sa_00000" + str(i) for i in range(cfg['TRAIN_SPLITS'])],
@@ -61,6 +61,12 @@ def main():
         DISTILLER = DecDistiller
         module = student.model.prompt_encoder.point_embeddings
         params = module[4].parameters() if not cfg['TEST'] else module.parameters()
+    elif cfg['MODE'] == 'lora':
+        DISTILLER = DecDistiller
+        student.model = student.model.to('cpu')
+        add_lora(student.model.mask_decoder)
+        student.model = student.model.to(cfg['DEVICE'])
+        params = [{"params": list(get_lora_params(student.model.mask_decoder))}]
     else:
         raise ValueError(f"Invalid mode: {cfg['MODE']}")
 
@@ -82,6 +88,7 @@ def main():
     if cfg['MODE'] == 'save_features':
         distiller.save_teacher_features(cfg['OUTPUT_DIR'].joinpath('sam_features.pt'))
     elif cfg['TEST']:
+        distiller.student.model.load_state_dict(torch.load(sam_checkpoint))
         pass
     else:
         distiller.distill(name=f"{cfg['MODE']}_{cfg['EXP']}")

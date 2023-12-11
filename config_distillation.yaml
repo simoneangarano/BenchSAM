@@ -1,14 +1,14 @@
 # GENERAL
-GPU: 0
+GPU: 1
 SEED: 0
 PROFILE: False
 DEBUG: False
 
 # IMPORTANT
-MODE: 'prompt' # encoder, decoder, prompt, save_features
+MODE: 'lora' # encoder, decoder, prompt, save_features
 MODEL: 'mobile_sam' # mobile_sam, mobile_sam_prompt
-CKPT: 'mobile_sam.pt' # 'mobile_sam.pt'
-EXP: 'save'
+CKPT: 'distilled_mobile_sam_lora_all.pt' # 'mobile_sam.pt'
+EXP: 'all_to_small'
 TEST: True
 SIZE_THRESHOLDS: [1.e-4, 5.e-4] # (0, 1)
 LOSS_WEIGHTS: [0,0,0,0,0,0,1] # self.FW, self.DW, self.BW, self.IW, self.MW, self.SW, self.GW 
@@ -43,7 +43,7 @@ DECAY: 1.0
 WD: 1.e-5
 
 # METRICS
-SAVE_OUTPUTS: True
+SAVE_OUTPUTS: False
 TRAIN:
   LOSS: []
   IOU: []

@@ -36,6 +36,11 @@ C = [[0.00, 0.65, 0.88, 0.6],[0.95, 0.47, 0.13, 0.4]]
 
 ### Metrics ###
 
+def iou(pred, target, eps=1e-5):
+    tp = np.sum(pred * target)  # TP (Intersection)
+    un = np.sum(pred + target)  # Union
+    return (tp + eps) / (un + eps)
+
 def get_metrics(target, pred, eps=1e-5, verbose=False):
 
     if verbose:
@@ -67,22 +72,19 @@ def get_metrics(target, pred, eps=1e-5, verbose=False):
     return iou, pixel_acc, dice, precision, specificity, recall
 
 def get_analytics(target_df, pred_df, prompt_df, cfg, skip_empty=False):
-    metrics = {k: [] for k in ['name', 'prompt', 'class', 't_class', 's_class', 'score', 'score_diff', 'mask_size', 
-                               'mask_size_diff', 'iou', 'pixel_acc', 'dice', 'precision', 'recall', 'specificity']}
+    metrics = {k: [] for k in ['name', 'prompt', 'mask_size', 'mask_size_diff', 
+                               'iou', 'pixel_acc', 'dice', 'precision', 'recall', 'specificity']}
     for i in range(len(target_df)):
         target = target_df.loc[i]
         pred = pred_df.loc[i]
         prompt = prompt_df.loc[i]
 
-        if 'mask' in prompt.keys(): 
-            if skip_empty and not prompt['mask'].any():
-                continue
         if cfg['DATASET'] == 'sa1b':
-            p = get_full_mask(pred['mask'], pred['mask_origin'], prompt['shape'])
+            p = get_full_mask(pred['mask'], None, prompt['shape'])
         else:
             p = pred['mask']
         if cfg['DATASET'] == 'sa1b':
-            t = get_full_mask(target['mask'], target['mask_origin'], prompt['shape'])
+            t = get_full_mask(target['mask'], None, prompt['shape'])
         else:
             t = target['mask']
 
@@ -90,13 +92,7 @@ def get_analytics(target_df, pred_df, prompt_df, cfg, skip_empty=False):
         
         metrics['name'].append(target['name'])
         metrics['prompt'].append(target['prompt'])
-        metrics['class'].append(target['class'])
-        metrics['t_class'].append(target['s_class'])
-        metrics['s_class'].append(pred['s_class'])
-        metrics['score'].append(pred['score'])
-        metrics['score_diff'].append((pred['score'] - target['score']) / (target['score'] + 1e-5))
         p_size = np.mean(p.astype('float'))
-    
         t_size = np.mean(t.astype('float'))
         metrics['mask_size'].append(p_size)
         metrics['mask_size_diff'].append((p_size - t_size) / (t_size + 1e-3))
@@ -189,28 +185,46 @@ def show_points_and_boxes_on_image(raw_image, boxes, input_points, input_labels=
     plt.axis('on')
     plt.show()
 
-def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=None, zoom=True, prompt_zoom=False, thr=5, save=None):
-    plt.figure(figsize=(5,5))
-    plt.imshow(raw_image, alpha=0.6)
+def show_points_and_masks_on_image(raw_image, masks, input_points, input_labels=None, zoom=True,
+                                   prompt_zoom=False, thr=5, save=None, ax=None, label=None):
+    if ax is None:
+        plt.figure(figsize=(5,5))
+        plt.imshow(raw_image, alpha=0.6)
+    else:
+        ax.imshow(raw_image, alpha=0.6)
     input_points = np.array(input_points)
     if input_labels is None:
         labels = np.ones_like(input_points[:, 0])
     else:
         labels = np.array(input_labels)
-    show_points(input_points, labels, plt.gca()) 
+    show_points(input_points, labels, plt.gca() if ax is None else ax) 
     for i, m in enumerate(masks):
-        show_mask(m, plt.gca(), color=C[i], alpha=0.8)
+        show_mask(m, plt.gca() if ax is None else ax, color=C[i], alpha=0.8)
     if prompt_zoom:
-        plt.xlim(input_points[:,0]-thr, input_points[:,0]+thr)
-        plt.ylim(input_points[:,1]+thr, input_points[:,1]-thr)
+        if ax is None:
+            plt.xlim(input_points[:,0]-thr, input_points[:,0]+thr)
+            plt.ylim(input_points[:,1]+thr, input_points[:,1]-thr)
+        else:
+            ax.set_xlim(input_points[:,0]-thr, input_points[:,0]+thr)
+            ax.set_ylim(input_points[:,1]+thr, input_points[:,1]-thr)
     elif zoom:
         min, max, _ = get_mask_limits(masks)
-        plt.xlim(min[0], max[0])
-        plt.ylim(max[1], min[1])
-    plt.axis('off')
-    if save is not None:
-        plt.savefig(save, bbox_inches='tight')
-    plt.show()
+        if ax is None:
+            plt.xlim(min[0], max[0])
+            plt.ylim(max[1], min[1])
+        else:
+            ax.set_xlim(min[0], max[0])
+            ax.set_ylim(max[1], min[1])
+    if label is not None:
+        if ax is None:
+            plt.title(label)
+        else:
+            ax.title.set_text(label)
+    if ax is None:
+        plt.axis('off')
+        if save is not None:
+            plt.savefig(save, bbox_inches='tight')
+        plt.show()
 
 def show_points(coords, labels, ax, marker_size=100):
     pos_points = coords[labels==1]
@@ -240,17 +254,38 @@ def show_entry(row, target_df, pred_df, cfg, zoom=True, prompt_zoom=False, thr=5
     target_mask = target_df[target_df['name']==row['name']]['mask'].values[0]
     pred_mask = pred_df[pred_df['name']==row['name']]['mask'].values[0]
     if cfg['DATASET'] == 'sa1b':
-        pred_mask = get_full_mask(pred_mask, pred_df[pred_df['name']==row['name']]['mask_origin'].values[0], image.shape[:2])
-        target_mask = get_full_mask(target_mask, target_df[target_df['name']==row['name']]['mask_origin'].values[0], image.shape[:2])
+        pred_mask = get_full_mask(pred_mask, None, image.shape[:2])
+        target_mask = get_full_mask(target_mask, None, image.shape[:2])
 
     show_points_and_masks_on_image(image, [pred_mask, target_mask], [row['prompt']], zoom=zoom, thr=thr, prompt_zoom=prompt_zoom, save=save)
-    print(f'ID: {row["name"]}, PromptClass: {get_labels(row["class"], cfg)}, ' 
-          f'TargetClass: {get_labels(row["t_class"], cfg)}, PredClass: {get_labels(row["s_class"], cfg)},') 
+    print(f'ID: {row["name"]}') 
     try:
-        print(f'ScoreDiff: {row["score_diff"]:.4f}, MaskSizeDiff: {row["mask_size_diff"]:.4f}, IoU: {row["iou"]:.4f}, '
+        print(f'MaskSizeDiff: {row["mask_size_diff"]:.4f}, IoU: {row["iou"]:.4f}, '
               f'Precision: {row["precision"]:.4f}, Recall: {row["recall"]:.4f}')
     except:
         return
+    
+def show_entry_subplot(row, df_p, df_s, df_m, df_o, cfg, zoom=True, prompt_zoom=False, thr=5, save=None):
+    image = get_image(row['name'], cfg)
+    masks, labels = [], []
+    gt = get_full_mask(df_p[df_p['name']==row['name']]['mask'].values[0], None, image.shape[:2])
+    labels.append(f'GT: {gt.mean():.4f}')
+    masks.append(gt)
+    m = get_full_mask(df_s[df_s['name']==row['name']]['mask'].values[0], None, image.shape[:2])
+    labels.append(f'SAM: {iou(m,gt):.4f}')
+    masks.append(m)
+    m = get_full_mask(df_m[df_m['name']==row['name']]['mask'].values[0], None, image.shape[:2])
+    labels.append(f'MobileSAM: {iou(m,gt):.4f}')
+    masks.append(m)
+    m = get_full_mask(df_o[df_o['name']==row['name']]['mask'].values[0], None, image.shape[:2])
+    labels.append(f'Ours: {iou(m,gt):.4f}')
+    masks.append(m)
+    print(f'ID: {row["name"]}') 
+    # create subplot
+    fig, axs = plt.subplots(1, 4, figsize=(20, 20))
+    for m, ax, lab in zip(masks, axs.flat, labels):
+        show_points_and_masks_on_image(image, [m], [row['prompt']], zoom=zoom, thr=thr, prompt_zoom=prompt_zoom, save=save, ax=ax, label=lab)
+    plt.show()
 
 def show_samples(pie_df, target_df, pred_df, cfg, n=5, zoom=True, prompt_zoom=False, thr=5, random=False, save=False):
     print('Legend: Target -> Orange, Prediction -> Blue')
@@ -262,6 +297,17 @@ def show_samples(pie_df, target_df, pred_df, cfg, n=5, zoom=True, prompt_zoom=Fa
     else:
         save = lambda x: None
     pie_df.apply(lambda x: show_entry(x, target_df, pred_df, cfg, zoom=zoom, prompt_zoom=prompt_zoom, thr=thr, save=save(n)), axis=1)
+
+def show_samples_subplot(df_pie, df_p, df_s, df_m, df_o, cfg, n=5, zoom=True, prompt_zoom=False, thr=5, random=False, save=False):
+    print('Legend: Target -> Orange, Prediction -> Blue')
+    df_pie = df_pie.sample(n) if random else df_pie[:n]
+    if save:
+        def save(x):
+            x -= 1
+            return f"figures/{cfg['EXPERIMENT']}{cfg['DATASET']}_{cfg['MODEL']}_{cfg['SPARSITY']}{cfg['MODE']}_{x}.pdf"
+    else:
+        save = lambda x: None
+    df_pie.apply(lambda x: show_entry_subplot(x, df_p, df_s, df_m, df_o, cfg=cfg, zoom=zoom, prompt_zoom=prompt_zoom, thr=thr, save=save(n)), axis=1)
 
 def get_hists(summary, cfg, save=True, plot=True):
     if len(summary) == 9:

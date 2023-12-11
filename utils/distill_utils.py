@@ -102,6 +102,7 @@ class DecDistiller(Distiller):
         self.size_thr_low, self.size_thr_high = cfg['SIZE_THRESHOLDS']
         self.pr = cProfile.Profile() if cfg['PROFILE'] else None
         self.best_iou = 0
+        self.prompts = None
 
     def get_features(self, img):
         self.student.set_image(img[0].to(self.device))
@@ -176,7 +177,7 @@ class DecDistiller(Distiller):
                 ps.dump_stats('results/profile.prof')
                 ps.print_stats(.1)
 
-    def validate(self, use_saved_features=False, save=False):
+    def validate(self, use_saved_features=False, save=False, save_sam=False):
         self.set_trainable_weights(train=False)
         with torch.no_grad():
             t = qqdm(self.test_dataloader, desc=format_str('bold', 'Validation'))
@@ -218,6 +219,10 @@ class DecDistiller(Distiller):
                     if self.prompts is None:
                         self.gt_masks.append(maskUtils.encode(np.asfortranarray(label[0].detach().cpu()==c)) if self.cfg['RLE_ENCODING'] else label[0]==c)
                         self.gt_sizes.append((label[0]==c).float().mean().item())
+                    if save_sam:
+                        self.sam_masks.append(maskUtils.encode(np.asfortranarray(t_mask.detach().cpu()>0)) if self.cfg['RLE_ENCODING'] else t_mask)
+                        self.sam_sizes.append((t_mask>0).float().mean().item())
+                    
                 i += 1
             return r_iou / (i+1), r_iougt / (i+1)
         
@@ -226,17 +231,27 @@ class DecDistiller(Distiller):
             self.prompts = pd.read_pickle(self.cfg['PROMPT_DIR']) 
             print(f"Prompts loaded from file {self.cfg['PROMPT_DIR']}") 
         else:
-            self.prompts = None
             print('Random Prompts') 
 
-        self.names, self.shapes, self.points, self.masks, self.gt_masks, self.sizes, self.gt_sizes = [], [], [], [], [], [], []
-        iou, iou_gt = self.validate(self.cfg['LOAD_FEATURES'], save=True)
+        save_sam = False if self.cfg['OUTPUT_DIR'].joinpath('sam.pkl').exists() else True
+
+        self.names, self.shapes, self.points, self.masks, self.sizes = [], [], [], [], []
+        self.gt_masks, self.gt_sizes, self.sam_masks, self.sam_sizes = [], [], [], []
+        iou, iou_gt = self.validate(self.cfg['LOAD_FEATURES'], save=True, save_sam=save_sam)
 
         if self.prompts is None:
             self.prompts = pd.DataFrame({'name': self.names, 'shape': self.shapes, 'prompt': self.points, 
                                          'mask': self.gt_masks, 'mask_size': self.gt_sizes})
             self.prompts.to_pickle(self.cfg['PROMPT_DIR']) 
             print(f"Prompts saved to file {self.cfg['PROMPT_DIR']}")
+
+        if save_sam:
+            sam_df = pd.DataFrame({'name': self.names, 'shape': self.shapes, 'prompt': self.points, 
+                                   'mask': self.sam_masks, 'mask_size': self.sam_sizes})
+            out_file = self.cfg['OUTPUT_DIR'].joinpath(f"sam_{self.cfg['EXP']}.pkl")
+            sam_df.to_pickle(out_file)
+            print(f"Results saved! {out_file}")
+
         
         df = pd.DataFrame({'name': self.names, 'shape': self.shapes, 'prompt': self.points,
                            'mask': self.masks, 'mask_size': self.sizes})
@@ -261,8 +276,10 @@ class DecDistiller(Distiller):
     
     def get_prompt(self, label, name=None, seed=None):
         if self.prompts is not None:
-            prompt = self.prompts[self.prompts['name']==name][['prompt', 'class']]
-            return [[prompt.values[0][0]]], label[prompt.values[0][0][1],prompt.values[0][0][0]]
+            prompt = self.prompts[self.prompts['name']==name]['prompt'].values
+            if len(prompt) == 0:
+                return None, None
+            return [[prompt[0]]], label[prompt[0][1], prompt[0][0]]
         if self.edge_filter:
             e = cv2.Canny(image=label.cpu().numpy().astype(np.uint8), threshold1=10, threshold2=50)
             e = cv2.dilate(e, np.ones((self.edge_width, self.edge_width), np.uint8), iterations = 1).astype(bool)
@@ -346,6 +363,12 @@ class DecDistiller(Distiller):
                 self.student.model.image_encoder.eval()
             elif self.cfg['MODE'] == 'prompt':
                 self.student.model.prompt_encoder.point_embeddings[4].train()
+            elif self.cfg['MODE'] == 'lora':
+                for n, m in self.student.model.mask_decoder.named_modules():
+                    if 'parametrization' in n:
+                        m.train()
+                    else:
+                        m.eval()
             else:
                 raise ValueError(f"Invalid mode: {self.cfg['MODE']}")
         else:

@@ -19,6 +19,7 @@ class SamPredictor:
     def __init__(
         self,
         sam_model: Sam,
+        return_attn: bool = False
     ) -> None:
         """
         Uses SAM to calculate the image embedding for an image, and then
@@ -29,6 +30,7 @@ class SamPredictor:
         """
         super().__init__()
         self.model = sam_model
+        self.return_attn = return_attn
         self.transform = ResizeLongestSide(sam_model.image_encoder.img_size)
         self.reset_image()
 
@@ -167,7 +169,11 @@ class SamPredictor:
         masks_np =  masks[0] if return_logits else masks[0].detach().cpu().numpy()
         iou_predictions_np = iou_predictions[0] if return_logits else iou_predictions[0].detach().cpu().numpy()
         low_res_masks_np = low_res_masks[0] if return_logits else low_res_masks[0].detach().cpu().numpy()
+
+        if self.return_attn:
+            return masks_np, iou_predictions_np, low_res_masks_np, self.model.mask_decoder.transformer.scores
         return masks_np, iou_predictions_np, low_res_masks_np
+        
 
     #@torch.no_grad()
     def predict_torch(
@@ -238,6 +244,7 @@ class SamPredictor:
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
             multimask_output=multimask_output,
+            return_attn=self.return_attn
         )
 
         # Upscale the masks to the original image resolution

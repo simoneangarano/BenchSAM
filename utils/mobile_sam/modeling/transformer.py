@@ -64,6 +64,7 @@ class TwoWayTransformer(nn.Module):
         image_embedding: Tensor,
         image_pe: Tensor,
         point_embedding: Tensor,
+        return_attn: bool=False,
     ) -> Tuple[Tensor, Tensor]:
         """
         Args:
@@ -88,18 +89,24 @@ class TwoWayTransformer(nn.Module):
         keys = image_embedding
 
         # Apply transformer blocks and final layernorm
+        self.scores = []
         for layer in self.layers:
             queries, keys = layer(
                 queries=queries,
                 keys=keys,
                 query_pe=point_embedding,
                 key_pe=image_pe,
+                return_attn=return_attn
             )
+            scores = [layer.cross_attn_token_to_image.scores, 
+                      layer.cross_attn_image_to_token.scores]
+            self.scores.append(scores)
 
         # Apply the final attention layer from the points to the image
         q = queries + point_embedding
         k = keys + image_pe
-        attn_out = self.final_attn_token_to_image(q=q, k=k, v=keys)
+        attn_out = self.final_attn_token_to_image(q=q, k=k, v=keys, return_attn=return_attn)
+        self.scores.append([self.final_attn_token_to_image.scores])
         queries = queries + attn_out
         queries = self.norm_final_attn(queries)
 
@@ -149,7 +156,7 @@ class TwoWayAttentionBlock(nn.Module):
         self.skip_first_layer_pe = skip_first_layer_pe
 
     def forward(
-        self, queries: Tensor, keys: Tensor, query_pe: Tensor, key_pe: Tensor
+        self, queries: Tensor, keys: Tensor, query_pe: Tensor, key_pe: Tensor, return_attn: bool=False
     ) -> Tuple[Tensor, Tensor]:
         # Self attention block
         if self.skip_first_layer_pe:
@@ -163,7 +170,7 @@ class TwoWayAttentionBlock(nn.Module):
         # Cross attention block, tokens attending to image embedding
         q = queries + query_pe
         k = keys + key_pe
-        attn_out = self.cross_attn_token_to_image(q=q, k=k, v=keys)
+        attn_out = self.cross_attn_token_to_image(q=q, k=k, v=keys, return_attn=return_attn)
         queries = queries + attn_out
         queries = self.norm2(queries)
 
@@ -175,7 +182,7 @@ class TwoWayAttentionBlock(nn.Module):
         # Cross attention block, image embedding attending to tokens
         q = queries + query_pe
         k = keys + key_pe
-        attn_out = self.cross_attn_image_to_token(q=k, k=q, v=queries)
+        attn_out = self.cross_attn_image_to_token(q=k, k=q, v=queries, return_attn=return_attn)
         keys = keys + attn_out
         keys = self.norm4(keys)
 
@@ -198,6 +205,7 @@ class Attention(nn.Module):
         self.embedding_dim = embedding_dim
         self.internal_dim = embedding_dim // downsample_rate
         self.num_heads = num_heads
+        self.scores = None
         assert self.internal_dim % num_heads == 0, "num_heads must divide embedding_dim."
 
         self.q_proj = nn.Linear(embedding_dim, self.internal_dim)
@@ -215,7 +223,7 @@ class Attention(nn.Module):
         x = x.transpose(1, 2)
         return x.reshape(b, n_tokens, n_heads * c_per_head)  # B x N_tokens x C
 
-    def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+    def forward(self, q: Tensor, k: Tensor, v: Tensor, return_attn: bool=False) -> Tensor:
         # Input projections
         q = self.q_proj(q)
         k = self.k_proj(k)
@@ -237,4 +245,6 @@ class Attention(nn.Module):
         out = self._recombine_heads(out)
         out = self.out_proj(out)
 
+        if return_attn:
+            self.scores = attn
         return out
